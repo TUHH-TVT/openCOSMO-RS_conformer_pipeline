@@ -735,8 +735,8 @@ if __name__ == "__main__":
 
             n = cg.calculate_rdkit(rms_threshold=1.0)
 
-            # method = ORCA_XTB2_ALPB('water')
-            # cg.calculate_orca(method)
+            method = ORCA_XTB2_ALPB('water')
+            cg.calculate_orca(method)
 
             cg.sort_by_energy()
 
