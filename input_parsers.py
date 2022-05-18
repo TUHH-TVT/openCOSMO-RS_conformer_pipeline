@@ -187,7 +187,11 @@ class COSMOParser(object):
         
         atm_nr = 0
         while line:
-            line = next(cosmofile).strip()
+            try:
+                line = next(cosmofile).strip()
+            except StopIteration:
+                line = False
+                
             if not line or '###' in line:
                 break
             line_splt = line.split()
