@@ -3,7 +3,6 @@
 """
 Created on Thu Feb  4 20:31:24 2021
 
-@author: lergos
 """
 
 import os
@@ -11,10 +10,9 @@ import re
 
 import numpy as np
 
-
-bohr_per_angstrom = 0.52917721092
-hartree_per_kJdivmol = 2625.499639479
-elpotatmu_per_volt = 27.211386245988
+kJ_per_kcal = 4.184                   # kJ/kcal
+angstrom_per_bohr = 0.52917721092     # angtrom/bohr
+kJdivmol_per_hartree = 2625.499639479 # (kJ/mol)/hartree
 
 class COSMOParser(object):
     def __init__(self, filepath, qc_program):
@@ -30,15 +28,15 @@ class COSMOParser(object):
                 'energy_tot': None,
                 'energy_dielectric': None,
                 'atm_nr': [],
-                'atm_pos': [],
+                'atm_pos': [],       # angstrom
                 'atm_elmnt': [],
                 'atm_rad': [],
                 'seg_nr': [],
                 'seg_atm_nr': [],
                 'seg_pos': [],
-                'seg_charge': [],
-                'seg_area': [],
-                'seg_sigma_raw': [],
+                'seg_charge': [],    # in e
+                'seg_area': [],      # angstrom²
+                'seg_sigma_raw': [], # e/angstrom²
                 'seg_potential': []
                 }
 
@@ -53,25 +51,12 @@ class COSMOParser(object):
 
         return self.cosmo_info
 
-    def save_xyz_file(self, filepath_xyz):
-
-        with open(filepath_xyz, 'w') as xyzf:
-            xyzf.write(f'{len(self.cosmo_info["atm_nr"])}\n') 
-            xyzf.write('\n')
-            atom_positions = self.cosmo_info['atm_pos'] / 0.52917721092
-            for i in self.cosmo_info['atm_nr']:
-                xyzf.write('{:s}  {:.16f}  {:.16f}  {:.16f}\n'.format(
-                    self.cosmo_info['atm_elmnt'][i], atom_positions[i][0],
-                    atom_positions[i][1], atom_positions[i][2]))
-
-
     def _read_single_float(self, line, variable, regex, scaling_factor):
         
-        if self.cosmo_info[variable] is None:
-            re_match = re.match(regex, line)
-            if re_match:
-                self.cosmo_info[variable] = float(re_match.groups()[0])
-                self.cosmo_info[variable] *= scaling_factor
+        re_match = re.match(regex, line)
+        if re_match:
+            self.cosmo_info[variable] = float(re_match.groups()[0])
+            self.cosmo_info[variable] *= scaling_factor
                 
     
     def _read_turbomole_atom_section(self, cosmofile):
@@ -95,10 +80,9 @@ class COSMOParser(object):
             self.cosmo_info['atm_nr'], dtype='int64')
         self.cosmo_info['atm_pos'] = (np.array(
             self.cosmo_info['atm_pos'], dtype='float64') *
-            bohr_per_angstrom)
+            angstrom_per_bohr)
         self.cosmo_info['atm_rad'] = np.array(
             self.cosmo_info['atm_rad'], dtype='float64')
-        
     
         
     def _read_turbomole_seg_section(self, cosmofile):
@@ -132,7 +116,7 @@ class COSMOParser(object):
             self.cosmo_info['seg_atm_nr'], dtype='int64')
         self.cosmo_info['seg_pos'] = (np.array(
             self.cosmo_info['seg_pos'], dtype='float64') *
-            bohr_per_angstrom)
+            angstrom_per_bohr)
         self.cosmo_info['seg_charge'] = np.array(
             self.cosmo_info['seg_charge'], dtype='float64')
         self.cosmo_info['seg_area'] = np.array(
@@ -157,21 +141,21 @@ class COSMOParser(object):
                 
                 self._read_single_float(
                     line, 'area', r'area\s*=\s*([0-9+-.eE]+)',
-                    bohr_per_angstrom**2)
+                    angstrom_per_bohr**2)
                 
                 self._read_single_float(
                     line, 'volume', r'volume\s*=\s*([0-9+-.eE]+)',
-                    bohr_per_angstrom**3)
+                    angstrom_per_bohr**3)
         
                 self._read_single_float(
                     line, 'energy_tot',
                     r'Total\s+energy\s+corrected.*=\s*([0-9+-.eE]+)',
-                    hartree_per_kJdivmol)
+                    kJdivmol_per_hartree)
     
                 self._read_single_float(
                     line, 'energy_dielectric',
                     r'Dielectric\s+energy\s+\[a\.u\.\]\s*=\s*([0-9+-.eE]+)',
-                    hartree_per_kJdivmol)
+                    kJdivmol_per_hartree)
                            
                 if line == '$coord_rad':
                     self._read_turbomole_atom_section(cosmofile)
@@ -207,7 +191,6 @@ class COSMOParser(object):
             self.cosmo_info['atm_nr'], dtype='int64')
         self.cosmo_info['atm_pos'] = (np.array(
             self.cosmo_info['atm_pos'], dtype='float64'))
-
         
 
     def _read_orca_atom_radii(self, cosmofile):
@@ -223,7 +206,7 @@ class COSMOParser(object):
             self.cosmo_info['atm_rad'].append(line_splt[3])
 
         self.cosmo_info['atm_rad'] = np.array(
-            self.cosmo_info['atm_rad'], dtype='float64')*bohr_per_angstrom 
+            self.cosmo_info['atm_rad'], dtype='float64')*angstrom_per_bohr 
         
 
     def _read_orca_seg_section(self, cosmofile):
@@ -244,8 +227,7 @@ class COSMOParser(object):
             self.cosmo_info['seg_nr'].append(seg_nr)
             seg_nr += 1
             self.cosmo_info['seg_atm_nr'].append(int(line_splt[-1]))
-            self.cosmo_info['seg_pos'].append(
-                [float(val) for val in line_splt[0:3]])
+            self.cosmo_info['seg_pos'].append([float(val) for val in line_splt[0:3]])
             self.cosmo_info['seg_charge'].append(float(line_splt[5]))
             self.cosmo_info['seg_area'].append(float(line_splt[3]))
             #TODO: ALIGN UNITS WITH TURBOMOLE
@@ -258,14 +240,13 @@ class COSMOParser(object):
             self.cosmo_info['seg_atm_nr'], dtype='int64')
         self.cosmo_info['seg_pos'] = (np.array(
             self.cosmo_info['seg_pos'], dtype='float64') *
-            bohr_per_angstrom)
+            angstrom_per_bohr)
         self.cosmo_info['seg_charge'] = np.array(
             self.cosmo_info['seg_charge'], dtype='float64')
         self.cosmo_info['seg_area'] = np.array(
-            self.cosmo_info['seg_area'], dtype='float64')*bohr_per_angstrom**2
+            self.cosmo_info['seg_area'], dtype='float64')*angstrom_per_bohr**2
         self.cosmo_info['seg_sigma_raw'] = (self.cosmo_info['seg_charge'] /
                                             self.cosmo_info['seg_area'])
-
   
     def _read_orca_cosmo(self):
         
@@ -281,21 +262,21 @@ class COSMOParser(object):
 
                 self._read_single_float(
                     line, 'area', r'\s*([0-9+-.eE]+)\s+#\s*Area',
-                    bohr_per_angstrom**2)
+                    angstrom_per_bohr**2)
                 
                 self._read_single_float(
                     line, 'volume', r'\s*([0-9+-.eE]+)\s+#\s*Volume',
-                    bohr_per_angstrom**3)
+                    angstrom_per_bohr**3)
         
                 self._read_single_float(
                     line, 'energy_tot',
                     r'FINAL\s+SINGLE\s+POINT\s+ENERGY\s*([0-9+-.eE]+)',
-                    hartree_per_kJdivmol)
+                    kJdivmol_per_hartree)
     
                 self._read_single_float(
                     line, 'energy_dielectric',
                     r'\s*([0-9+-.eE]+)\s+#\s*CPCM\s+dielectric\s+energy',
-                    hartree_per_kJdivmol)
+                    kJdivmol_per_hartree)
                            
                 if line == '#XYZ_FILE':
                     self._read_orca_atom_coordinates(cosmofile)
@@ -309,9 +290,6 @@ class COSMOParser(object):
              
 class PyCrsError(Exception):
     pass
-
-
-
 
 if __name__ == "__main__":
     main()
