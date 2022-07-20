@@ -1,6 +1,7 @@
 # openCOSMO-RS_conformer_pipeline
 
-The idea is that with the OS having access to the path of the ORCA installation you can run the conformer generator as follows:
+The idea is that you can run the conformer generator as follows.
+Important is that the folder containing the executable has to be added to the path environment variable.
 
 ```python
 python ConformerGenerator.py --structures_file file.inp --n_cores 2
