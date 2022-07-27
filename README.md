@@ -1,8 +1,11 @@
 # openCOSMO-RS_conformer_pipeline
 
-The idea is that you can run the conformer generator as follows.
-Important is that the folder containing the executable has to be added to the path environment variable.
+Important for the execution are following requirements:
+- Working installation of ORCA 5.0.3+
+- The folder containing the ORCA installation has to be added to the path environment variable.
+- Install the xtb executable from the [official repo releases](https://github.com/grimme-lab/xtb/releases). To do this copy the main binary from the 'bin' folder inside the compressed file into the ORCA installation directory and rename it to 'otool_xtb' or 'otool_xtb.exe' depending on your OS.
 
+The idea is that you can run the conformer generator as follows:
 ```python
 python ConformerGenerator.py --structures_file file.inp --n_cores 2
 ```
