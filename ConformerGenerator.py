@@ -463,13 +463,22 @@ class ORCA(ABC):
             file.write('\n'+'#'*50+'\n')
             file.write('#ENERGY\n')
             line_final_energy = ''
+            dipole_moment = None
             with open(self.filename_final_log, 'r') as log_file:
                 for line in log_file:
                     re_match = re.match(
                         r'.*FINAL\s+SINGLE\s+POINT\s+ENERGY.+', line)
                     if re_match:
                         line_final_energy = line
+
+                    if line.strip().startswith('x,y,z [Debye]:'):
+                        dipole_moment = ' '.join(line.strip().split()[-3:])
+
             file.write(line_final_energy)
+            if dipole_moment:
+                file.write('\n'+'#'*50+'\n')
+                file.write('#DIPOLE MOMENT (Debye)\n')  
+                file.write(f'{dipole_moment}\n')    
 
             file.write('\n'+'#'*50+'\n')
             file.write('#XYZ_FILE\n')

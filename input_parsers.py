@@ -24,6 +24,7 @@ class COSMOParser(object):
                 'qc_program': qc_program,
                 'method': '',
                 'area': None,
+                'dipole_moment': None, # Debye
                 'volume': None,
                 'energy_tot': None,
                 'energy_dielectric': None,
@@ -286,6 +287,11 @@ class COSMOParser(object):
                 
                 if 'SURFACE POINTS (A.U.)' in line:
                     self._read_orca_seg_section(cosmofile)
+
+                if 'DIPOLE MOMENT (Debye)' in line:
+                    line = next(cosmofile).strip()
+                    self.cosmo_info['dipole_moment'] = \
+                        np.array([float(v) for v in line.strip().split()[-3:]])
 
              
 class PyCrsError(Exception):
