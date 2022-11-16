@@ -413,14 +413,24 @@ class ORCA(ABC):
         self.filename_final_xyz = f'{self.filename_base}.xyz'
         self.filename_final_cpcm = None
         if platform.system().lower() == 'windows':
-            output = spr.run(["where", "orca"], capture_output=True)
-            self._orca_full_path = output.stdout.decode('utf-8').split()[0].strip()
+            search_command = 'where'
+            index_to_be_used = 0
         elif platform.system().lower() == 'linux':
-            output = spr.run(["whereis", "orca"], capture_output=True)
-            self._orca_full_path = output.stdout.decode('utf-8').split()[1].strip()
+            search_command = 'whereis'
+            index_to_be_used = 1
         else:
-            raise NotImplementedError(f'For the following OS, getting the full path of the ORCA \
-            executable needs to be programmed: {platform.system()}')
+            raise NotImplementedError(f'For the following OS, getting the full path of the ORCA executable needs to be programmed: {platform.system()}')
+
+        output = spr.run([search_command, 'orca'], capture_output=True)
+        result = output.stdout.decode('utf-8').split()
+        if output.returncode != 0 or len(result) <= index_to_be_used:
+            raise FileNotFoundError('The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.')
+        self._orca_full_path = output.stdout.decode('utf-8').split()[index_to_be_used].strip()
+
+        output2 = spr.run([search_command, 'otool_xtb'], capture_output=True)
+        result2 = output2.stdout.decode('utf-8').split()
+        if output2.returncode != 0 or len(result2) <= index_to_be_used:
+            raise FileNotFoundError('The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.')
 
     def execute(self, filepath_inp, dir_step, charge, n_cores = None, max_RAM_per_core_in_MB=None):
 
