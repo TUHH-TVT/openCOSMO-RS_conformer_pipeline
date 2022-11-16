@@ -413,11 +413,14 @@ class ORCA(ABC):
         self.filename_final_xyz = f'{self.filename_base}.xyz'
         self.filename_final_cpcm = None
         if platform.system().lower() == 'windows':
-            self._orca_full_path = 'orca'
-        else:
+            output = spr.run(["where", "orca"], capture_output=True)
+            self._orca_full_path = output.stdout.decode('utf-8').split()[0].strip()
+        elif platform.system().lower() == 'linux':
             output = spr.run(["whereis", "orca"], capture_output=True)
             self._orca_full_path = output.stdout.decode('utf-8').split()[1].strip()
-
+        else:
+            raise NotImplementedError(f'For the following OS, getting the full path of the ORCA \
+            executable needs to be programmed: {platform.system()}')
 
     def execute(self, filepath_inp, dir_step, charge, n_cores = None, max_RAM_per_core_in_MB=None):
 
