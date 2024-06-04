@@ -8,15 +8,15 @@ Important for the execution are following requirements:
 
 The idea is that you can run the conformer generator as follows:
 ```python
-python ConformerGenerator.py --structures_file file.inp --n_cores 2
+python ConformerGenerator.py --structures_file file.inp --cpcm_radii cpcm_radii.inp --n_cores 2
 ```
 
 with file.inp beeing a TAB separated file similar to the following:
 
-name&nbsp;_[TAB]_&nbsp;SMILES&nbsp;_[TAB]_&nbsp;charge
+name&nbsp;_[TAB]_&nbsp;SMILES&nbsp;_[TAB]_&nbsp;optional xyz file&nbsp;_[TAB]_&nbsp;charge
 
 Examples:
 ```
-methane[TAB]C[TAB]0
-ethanol[TAB]CCO[TAB]0
+methane[TAB]C[TAB]xyz_file[TAB]0
+ethanol[TAB]CCO[TAB][TAB]0
 ```
