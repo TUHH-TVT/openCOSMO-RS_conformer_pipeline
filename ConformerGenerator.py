@@ -1095,8 +1095,6 @@ if __name__ == "__main__":
             method = ORCA_DFT_CPCM_FAST(cpcm_radii=cpcm_radii)
             cg.calculate_orca(method)
 
-            cg.filter_by_function(lambda conformers: [0])
-
             cg.filter_by_energy_window(6 * kJ_per_kcal)
 
             cg.filter_by_rms_window(rms_threshold=1.0)
