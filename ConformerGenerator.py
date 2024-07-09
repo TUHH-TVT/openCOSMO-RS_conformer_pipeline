@@ -657,6 +657,14 @@ class ORCA(ABC):
             raise FileNotFoundError('The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.')
         self._orca_full_path = output.stdout.decode('utf-8').split()[index_to_be_used].strip()
 
+        output1 = spr.run(['orca', 'nothing'], capture_output=True)
+        result1 = output1.stdout.decode('utf-8')
+        match = re.search(r"Program Version (\d+\.\d+(?:.\d+)?)", result1)
+        if match:
+            self._orca_version = tuple([int(v) for v in match.group(1).split('.')])
+        else:
+            raise ValueError('Could not determine the version of the ORCA executable.')
+
         output2 = spr.run([search_command, 'otool_xtb'], capture_output=True)
         result2 = output2.stdout.decode('utf-8').split()
         if output2.returncode != 0 or len(result2) <= index_to_be_used:
@@ -962,8 +970,11 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
 
         lines.append('%cpcm')
         lines.extend(self._get_radii_lines())
-        if self._cut_area_in_bohr_squared is not None:
-            lines.append(f'cut_area {self._cut_area_in_bohr_squared}')
+
+        if self._orca_version[0] >= 6:
+            if self._cut_area_in_bohr_squared is not None:
+                lines.append(f'cut_area {self._cut_area_in_bohr_squared}')
+        
         lines.append('end')
         lines.append('')
 
@@ -1055,7 +1066,7 @@ if __name__ == "__main__":
 
         with ConformerGenerator(name, continue_calculation=args.continue_calculation, n_cores=args.n_cores) as cg:
 
-            # # gas
+            # gas
             n = cg.setup_initial_structure(smiles, 'smiles', charge, title='gas phase calculation')
             cg.calculate_rdkit(rms_threshold=1.0)
 
