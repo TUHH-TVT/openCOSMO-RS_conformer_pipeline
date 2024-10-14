@@ -1,4 +1,3 @@
-import copy
 import os
 import re
 import shutil
@@ -7,6 +6,7 @@ import zipfile
 import platform
 import argparse
 import csv
+import tempfile
 
 import numpy as np
 from rdkit import Chem
@@ -25,6 +25,31 @@ from input_parsers import kJ_per_kcal
 from input_parsers import kJdivmol_per_hartree
 from input_parsers import angstrom_per_bohr
 
+class ExecutableFinder:
+    def __init__(self, executable_name: str, error_message: str):
+        self.executable_name = executable_name
+        self.error_message = error_message
+        self.executable_path = self._find_executable()
+
+    def _find_executable(self):
+        system_name = platform.system().lower()
+        if system_name == 'windows':
+            search_command = 'where'
+            index_to_be_used = 0
+        elif system_name == 'linux':
+            search_command = 'whereis'
+            index_to_be_used = 1
+        else:
+            raise NotImplementedError(f'For the following OS, getting the full path of the {self.executable_name} executable needs to be programmed: {platform.system()}')
+
+        output = spr.run([search_command, self.executable_name], capture_output=True)
+        result = output.stdout.decode('utf-8').split()
+
+        if output.returncode != 0 or len(result) <= index_to_be_used:
+            raise FileNotFoundError(self.error_message)
+
+        return result[index_to_be_used].strip()
+
 class ConformerGenerator(object):
 
     @staticmethod
@@ -32,9 +57,58 @@ class ConformerGenerator(object):
         xyz_mol = Chem.MolFromXYZFile(xyz_file)
         rdDetermineBonds.DetermineBonds(xyz_mol, charge=charge)
         return xyz_mol
-
+    
+    # should work for ground state properties of neutrals and ions
     @staticmethod
-    def get_embedded_mol(smiles, xyz_file=None, charge=0):
+    def calculate_multiplicity(molecule, charge):
+        molecule = Chem.AddHs(molecule)
+        electrons = 0
+        for atom in molecule.GetAtoms():
+            atomic_number = atom.GetAtomicNum()
+            electrons += atomic_number
+
+        if (electrons - charge) % 2 == 0:
+            return 1
+        else:
+            return 2
+        
+    @classmethod
+    def find_balloon_executable(cls):
+        if not hasattr(cls, '_balloon_executable'):
+            try:
+                balloon_finder = ExecutableFinder('balloon', 'Could not find balloon executable.')
+                cls._balloon_executable = balloon_finder.executable_path
+            except FileNotFoundError as e:
+                print(e)
+                cls._balloon_executable = None
+        return cls._balloon_executable
+
+    @classmethod
+    def EmbedMolecule_with_balloon(cls, mol, numConfs=1):
+
+        balloon_executable = cls.find_balloon_executable()
+        # generate 3D structure without energy minimization
+        nConfsMissing = numConfs - mol.GetNumConformers()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                
+                temporary_in_MOL_file = os.path.join(temp_dir, 'in.mol')
+                temporary_out_SDF_file = os.path.join(temp_dir, 'out.sdf')
+                Chem.MolToMolFile(mol, temporary_in_MOL_file)
+                command = f'{balloon_executable} --nconfs {nConfsMissing} --noGA --njobs 4 --randomSeed 42 --output-format sdf "{temporary_in_MOL_file}" "{temporary_out_SDF_file}"'
+                _ = spr.run(command, capture_output=True)
+                
+                with Chem.SDMolSupplier(temporary_out_SDF_file, removeHs=False, sanitize=False) as suppl:
+                    for conf_mol in suppl:
+                        conf = Chem.Conformer(conf_mol.GetConformer())
+                        mol.AddConformer(conf, assignId=True)
+
+            return 0
+        except Exception as e:
+            return -1
+            
+    @classmethod
+    def get_embedded_mol(cls, smiles, xyz_file=None, charge=0):
 
         mol = Chem.MolFromSmiles(smiles)
         
@@ -47,16 +121,27 @@ class ConformerGenerator(object):
             raise ValueError('Could not generate mol struct from smiles: {}'.
                              format(smiles))
 
-        if xyz_file is None:
+        if xyz_file is None:    
             mol = Chem.AddHs(mol)
-            retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d)
+            retVal = -1
+            try:
+                retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d)
+            except Exception:
+                pass
             if retVal < 0 :
-                retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d, useRandomCoords=True)
+                try:
+                    retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d, useRandomCoords=True)
+                except Exception:
+                    pass
+
+            if retVal < 0 :
+                retVal = cls.EmbedMolecule_with_balloon(mol)
             if retVal == 0 :
-                if AllChem.UFFOptimizeMolecule(mol) != 0 :
-                    retVal = AllChem.UFFOptimizeMolecule(mol, maxIters=10000)
-                    if retVal != 0:
-                        raise ValueError(f'Molecule could not be embedded. retVal={retVal}')
+                try:
+                    if AllChem.UFFOptimizeMolecule(mol) != 0 :
+                        AllChem.UFFOptimizeMolecule(mol, maxIters=10000)
+                except Exception:
+                    pass
 
         else:
             xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
@@ -91,7 +176,6 @@ class ConformerGenerator(object):
         with open(filepath_xyz, 'r') as xyzf:
             n_atoms = int(xyzf.readline().strip())
             comment = xyzf.readline().strip()
-            atom_positions = []
             atom_symbols = []
             
             conformer = Chem.Conformer(n_atoms)
@@ -121,7 +205,7 @@ class ConformerGenerator(object):
     @staticmethod
     def guess_needed_ressources(mol):
 
-        number_of_heavy_atoms = Chem.RemoveHs(mol).GetNumAtoms()
+        number_of_heavy_atoms = sum([1 if atom.GetSymbol() != 'H' else 0 for atom in mol.GetAtoms()])
         number_of_atoms = Chem.AddHs(mol).GetNumAtoms()
 
         max_RAM_per_core_in_MB = 2000
@@ -167,6 +251,7 @@ class ConformerGenerator(object):
         
         self._max_RAM_per_core_in_MB = max_RAM_per_core_in_MB
 
+
     def __enter__(self):
         print(f'start: {self.name}')
         return self
@@ -207,6 +292,7 @@ class ConformerGenerator(object):
                 self.mol = None     
 
         self.charge = Chem.rdmolops.GetFormalCharge(self.mol)
+        self.multiplicity = ConformerGenerator.calculate_multiplicity(self.mol, charge)
 
         if self.charge != charge:
             raise ValueError(f'The charge of following molecule does not agree with the smiles: {self.name}')
@@ -352,10 +438,15 @@ class ConformerGenerator(object):
             z = atom_positions[i, 2]
             conf.SetAtomPosition(i, Point3D(x,y,z))
 
-    def calculate_rdkit(self, number_of_conformers_generated=None, rms_threshold=0.5, rms_only_heavy_atoms=True):
+    def calculate_rdkit(self, number_of_conformers_generated=None, rms_threshold=0.5, rms_only_heavy_atoms=True, fallback_on_balloon_for_conformer_generation=True):
 
         if number_of_conformers_generated is None:
-            number_of_rotable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(Chem.RemoveHs(self.mol))
+            temp = self.mol
+            try:
+                temp = Chem.RemoveHs(self.mol)
+            except Exception:
+                pass
+            number_of_rotable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(temp)
 
             # heuristic taken from https://doi.org/10.1021/ci2004658
             if number_of_rotable_bonds <= 7:
@@ -376,10 +467,13 @@ class ConformerGenerator(object):
                 self.mol, numConfs=number_of_conformers_generated,
                 randomSeed=0xf00d)
             
-            if self.mol.GetNumConformers() == 0:
+            if self.mol.GetNumConformers() != number_of_conformers_generated:
                 _ = Chem.AllChem.EmbedMultipleConfs(
                     self.mol, numConfs=number_of_conformers_generated,
                     randomSeed=0xf00d, useRandomCoords=True)
+
+            if self.mol.GetNumConformers() != number_of_conformers_generated and fallback_on_balloon_for_conformer_generation:
+                _ = self.EmbedMolecule_with_balloon(self.mol, number_of_conformers_generated)
 
             if Chem.AllChem.MMFFHasAllMoleculeParams(self.mol):
                 mmff_optimized = Chem.AllChem.MMFFOptimizeMoleculeConfs(
@@ -390,19 +484,33 @@ class ConformerGenerator(object):
 
             energies = np.array([res[1] for res in mmff_optimized])
             did_not_converge = np.array([res[0] for res in mmff_optimized])
-            energies *= kJ_per_kcal*1E3 # J
-            rel_probs = (np.exp(-energies/(spcon.R*298.15)) /
-                        (np.exp(-(energies/(spcon.R*298.15)).min())))
+
+            # for some ionic structures, the ions are overlapping
+            # this filters them out if someone knows a better ways to deal with 
+            # this, please tell me
+            def has_overlapping_atoms(conformer_idx, threshold = 0.1):
+                positions = self.mol.GetConformer(conformer_idx).GetPositions()
+                distances = np.linalg.norm(positions[:, np.newaxis] - positions, axis=2)
+                
+                # Check for overlaps (excluding self-distances)
+                overlap_mask = (distances < threshold) & (distances > 0)
+                return np.any(overlap_mask)
 
             cnfs = self.mol.GetConformers()
             n_conf = len(cnfs)
             
+            idx_to_keep = np.ones(n_conf, dtype='bool')
+            energies *= kJ_per_kcal*1E3 # J
             for idx, energy_in_kJdivmol in zip(range(n_conf), energies / 1000):
                 self.mol.GetConformer(idx).SetDoubleProp('energy', energy_in_kJdivmol / kJdivmol_per_hartree)
+                idx_to_keep[idx] = not has_overlapping_atoms(idx)
+
             
-            idx_to_keep = np.ones(n_conf, dtype='bool')
             idx_to_keep[did_not_converge] = False
+            rel_probs = (np.exp(-energies/(spcon.R*298.15)) /
+                        (np.exp(-(energies[idx_to_keep]/(spcon.R*298.15)).min())))
             idx_to_keep[rel_probs < 1e-2] = False
+
             idx_to_keep = self._get_idx_to_keep_by_rms_window(self.mol.GetConformers(), rms_threshold, rms_only_heavy_atoms, idx_to_keep)
 
             self._filter(idx_to_keep)
@@ -435,7 +543,7 @@ class ConformerGenerator(object):
                 if not os.path.isdir(dir_struct):
                     self.save_to_disk(conformer_indices_to_output=[conformer_index], output_folder=dir_struct)
 
-                    _ = method.execute(os.path.join(dir_struct, f'{conformer_basename}.xyz'), self._dir_step, self.charge, self._n_cores, self._max_RAM_per_core_in_MB)
+                    _ = method.execute(os.path.join(dir_struct, f'{conformer_basename}.xyz'), self._dir_step, self.charge, self.multiplicity, self._n_cores, self._max_RAM_per_core_in_MB)
 
                 output_filepath = os.path.join(dir_struct, f'{conformer_basename}.orcacosmo')
                 spp = SigmaProfileParser(output_filepath, 'orca')
@@ -557,7 +665,7 @@ class ConformerGenerator(object):
             idx_to_keep[0:min(maximum_number_of_conformers_to_keep, n_conf)] = True
             return idx_to_keep
 
-        self.filter_by_function(internal_filter, step_name='filter_by_rms_window')
+        self.filter_by_function(internal_filter, step_name='filter_by_maximum_number_of_conformers_to_keep')
         return self.current_step_number
 
     def _log_results(self, last = False, title=None, should_skip_step_execution=False):
@@ -581,7 +689,7 @@ class ConformerGenerator(object):
 
             self._start_time_step = time.monotonic()
 
-    def save_to_disk(self, conformer_indices_to_output=None, output_folder=None, save_xyz_file=True, save_attached_file=False):
+    def save_to_disk(self, conformer_indices_to_output=None, output_folder=None, save_xyz_file=True, save_attached_file=False, save_last_log_file=False):
  
         if conformer_indices_to_output is None:
             conformer_indices_to_output = range(len(self.mol.GetConformers()))
@@ -603,6 +711,11 @@ class ConformerGenerator(object):
                     _, file_extension = os.path.splitext(attached_file)
                     shutil.copy(attached_file,
                                 os.path.join(output_folder, f'{conformer_basename}{file_extension}'))
+                    
+            if save_last_log_file:
+                shutil.copy(os.path.join(self._dir_step,'calculate',conformer_basename,'log_output.dat'), os.path.join(output_folder, 'log_output.dat'))
+            
+
 
     def copy_output(self, destination_folder, excluded_extensions=[], step_number=-1):
         shutil.copytree(os.path.join(self.dir_job, self.step_folders[step_number], 'out'),
@@ -642,6 +755,9 @@ class ORCA(ABC):
         self.mol = None
         self.optimize_kw = 'OPT'
 
+        orca_finder = ExecutableFinder('orca', 'The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.')
+        self._orca_full_path = orca_finder.executable_path
+
         if platform.system().lower() == 'windows':
             search_command = 'where'
             index_to_be_used = 0
@@ -651,26 +767,9 @@ class ORCA(ABC):
         else:
             raise NotImplementedError(f'For the following OS, getting the full path of the ORCA executable needs to be programmed: {platform.system()}')
 
-        output = spr.run([search_command, 'orca'], capture_output=True)
-        result = output.stdout.decode('utf-8').split()
-        if output.returncode != 0 or len(result) <= index_to_be_used:
-            raise FileNotFoundError('The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.')
-        self._orca_full_path = output.stdout.decode('utf-8').split()[index_to_be_used].strip()
+        _ = ExecutableFinder('otool_xtb', 'The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.')
 
-        output1 = spr.run(['orca', 'nothing'], capture_output=True)
-        result1 = output1.stdout.decode('utf-8')
-        match = re.search(r"Program Version (\d+\.\d+(?:.\d+)?)", result1)
-        if match:
-            self._orca_version = tuple([int(v) for v in match.group(1).split('.')])
-        else:
-            raise ValueError('Could not determine the version of the ORCA executable.')
-
-        output2 = spr.run([search_command, 'otool_xtb'], capture_output=True)
-        result2 = output2.stdout.decode('utf-8').split()
-        if output2.returncode != 0 or len(result2) <= index_to_be_used:
-            raise FileNotFoundError('The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.')
-
-    def execute(self, filepath_inp, dir_step, charge, n_cores = None, max_RAM_per_core_in_MB=None):
+    def execute(self, filepath_inp, dir_step, charge, multiplicity, n_cores = None, max_RAM_per_core_in_MB=None):
 
         if n_cores is None:
             n_cores = 1
@@ -686,6 +785,7 @@ class ORCA(ABC):
         self.dir_old = os.getcwd()
         self.dir_work = os.path.dirname(filepath_inp)
 
+        self.multiplicity = multiplicity
         self.charge = charge
         self.filepath_inp = filepath_inp
         self.filename = os.path.basename(filepath_inp)
@@ -801,7 +901,7 @@ class ORCA_XTB2_ALPB(ORCA):
         lines.append(f'%base "{self.filename_base}"')
 
         lines.append('')
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename} ')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename} ')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
@@ -830,7 +930,7 @@ class ORCA_DFT_FAST(ORCA):
         lines.append(f'%base "{self.filename_base}"')
 
         lines.append('')
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename} ')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename} ')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
@@ -862,7 +962,7 @@ class ORCA_DFT_FINAL(ORCA):
         lines.append(f'%base "{self.filename_base}"')
         lines.append('')
 
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename}')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
         lines.append('')
 
         lines.append('$new_job')
@@ -874,7 +974,7 @@ class ORCA_DFT_FINAL(ORCA):
         lines.append(f'%base "{self.filename_final_base}"')
         lines.append('')
 
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename_final_xyz}')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename_final_xyz}')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
@@ -937,14 +1037,14 @@ class ORCA_DFT_CPCM_FAST(ORCA_DFT_CPCM):
         lines.append(f'! DFT {self.optimize_kw} CPCM BP86 def2-TZVP(-f){parallel_string}')
 
         lines.append('')
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename} ')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename} ')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
             file.write('\n'.join(lines))
 
 class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
-    def __init__(self, mol, cpcm_radii=None, cut_area_in_angstrom_squared=None):
+    def __init__(self, mol, cpcm_radii=None, cut_area_in_angstrom_squared=None, do_geometry_optimization=True):
 
         super().__init__(method_description='DFT_CPCM_BP86_def2-TZVP+def2-TZVPD_SP',
                         step_name='ORCA_DFT_CPCM_final',
@@ -952,6 +1052,7 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
                         cut_area_in_angstrom_squared=cut_area_in_angstrom_squared)
 
         self.filename_base = 'geo_opt_tzvp'
+        self.do_geometry_optimization = do_geometry_optimization
 
         self.filename_final_xyz = f'{self.filename_base}.xyz'
         self.filename_final_base = 'single_point_tzvpd'
@@ -965,16 +1066,17 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
         lines.append(f'%MaxCore {self._max_RAM_per_core_in_MB}')
         lines.append('')
 
-        lines.append(f'%base "{self.filename_base}"')
-        lines.append('')
+        if self.do_geometry_optimization:
+            lines.append(f'%base "{self.filename_base}"')
+            lines.append('')
+        else:
+            lines.append(f'%base "{self.filename_final_base}"')
+            lines.append('')
 
         lines.append('%cpcm')
         lines.extend(self._get_radii_lines())
-
-        if self._orca_version[0] >= 6:
-            if self._cut_area_in_bohr_squared is not None:
-                lines.append(f'cut_area {self._cut_area_in_bohr_squared}')
-        
+        if self._cut_area_in_bohr_squared is not None:
+            lines.append(f'cut_area {self._cut_area_in_bohr_squared}')
         lines.append('end')
         lines.append('')
 
@@ -982,14 +1084,15 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
         if self._n_cores > 1:
             parallel_string = f' PAL{self._n_cores}'
 
-        lines.append(f'! {self.optimize_kw} CPCM BP86 def2-TZVP{parallel_string}')
-        lines.append('')
+        if self.do_geometry_optimization:
+            lines.append(f'! {self.optimize_kw} CPCM BP86 def2-TZVP{parallel_string}')
+            lines.append('')
 
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename}')
-        lines.append('')
+            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
+            lines.append('')
 
-        lines.append('$new_job')
-        lines.append('')
+            lines.append('$new_job')
+            lines.append('')
 
         lines.append(f'! CPCM BP86 def2-TZVPD SP{parallel_string}')
         lines.append('')
@@ -997,12 +1100,15 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
         lines.append(f'%base "{self.filename_final_base}"')
         lines.append('')
 
-        lines.append(f'* xyzfile {self.charge} 1 {self.filename_final_xyz}')
+        if self.do_geometry_optimization:
+            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename_final_xyz}')
+        else:
+            self.filename_final_xyz = self.filename
+            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
             file.write('\n'.join(lines))
-
 
 if __name__ == "__main__":
 
@@ -1013,7 +1119,8 @@ if __name__ == "__main__":
                         required=True)
 
     parser.add_argument('--cpcm_radii_file',
-                        help='File including the radii used in CPCM calculations as tab separated values like so: atomic number TAB radius')
+                        help='File including the radii used in CPCM calculations as tab separated values like so: atomic number TAB radius',
+                        required=True)
 
     parser.add_argument('--n_cores',
                         help='Number of cores used for parallelization when possible.',
@@ -1034,6 +1141,7 @@ if __name__ == "__main__":
             
     name_smiles_dct = {}
     available_atomic_numbers = set()
+    number_of_atoms = []
     with open(args.structures_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
         for line in reader:
@@ -1044,78 +1152,98 @@ if __name__ == "__main__":
                 name, smiles, xyz_file, charge = [val.strip() for val in line]
                 name_smiles_dct[name] = (smiles, xyz_file, int(charge))
                 if len(smiles) > 0:
-                    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+                    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+                    mol.UpdatePropertyCache(strict=False)
+                    mol = Chem.AddHs(mol)
                     available_atomic_numbers.update([atom.GetAtomicNum() for atom in mol.GetAtoms()])
+                    number_of_atoms.append(mol.GetNumAtoms())
 
                 if mol is None:
                     if len(xyz_file) > 0:
                         with open(xyz_file, 'r') as f:
                             xyz_file_lines = f.readlines()
+                            this_number_of_atoms = 0
                             for xyz_file_line in xyz_file_lines[2:]:
                                 xyz_file_line = xyz_file_line.split()
                                 if len(xyz_file_line) == 4:
                                     atom_symbol = xyz_file_line[0]
                                     available_atomic_numbers.add(Chem.GetPeriodicTable().GetAtomicNumber(atom_symbol))
+                                    this_number_of_atoms += 1
+
+                            number_of_atoms.append(this_number_of_atoms)
+
 
     if len(cpcm_radii) > 0:
         atomic_numbers_without_radii = available_atomic_numbers - set(cpcm_radii.keys())
         if len(atomic_numbers_without_radii) > 0:
             raise RuntimeError(f'No CPCM radii were specified for the following atomic numbers: {sorted(atomic_numbers_without_radii)}')
 
-    for name, (smiles, xyz_file, charge) in name_smiles_dct.items():
+    for (name, (smiles, xyz_file, charge)), n_atoms in zip(name_smiles_dct.items(), number_of_atoms, strict=True):
 
         with ConformerGenerator(name, continue_calculation=args.continue_calculation, n_cores=args.n_cores) as cg:
 
-            # gas
-            n = cg.setup_initial_structure(smiles, 'smiles', charge, title='gas phase calculation')
-            cg.calculate_rdkit(rms_threshold=1.0)
+            is_single_ion = n_atoms == 1 and charge != 0
 
-            cg.sort_by_energy()
+            # skip gas phase calculation if single ion
+            initial_rdkit_molecule_with_conformers = None
+            if not is_single_ion:
+                # # gas
+                n = cg.setup_initial_structure(smiles, 'smiles', charge, title='gas calculation')
+                
+                cg.calculate_rdkit(rms_threshold=1.0)
 
-            cg.filter_by_energy_window(6 * kJ_per_kcal)
+                cg.sort_by_energy()
 
-            cg.filter_by_rms_window(rms_threshold=1.0)
-            initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) # create copy for later
+                cg.filter_by_energy_window(6 * kJ_per_kcal)
 
-            method = ORCA_DFT_FAST()
-            cg.calculate_orca(method)
+                cg.filter_by_rms_window(rms_threshold=1.0)
+                initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) # create copy for later
 
-            cg.sort_by_energy()
+                method = ORCA_DFT_FAST()
+                cg.calculate_orca(method)
 
-            cg.filter_by_function(lambda conformers: [0])
+                cg.sort_by_energy()
 
-            method = ORCA_DFT_FINAL()
-            cg.calculate_orca(method)
+                cg.filter_by_function(lambda conformers: [0])
 
-            cg.copy_output(os.path.join(cg.dir_job, 'energy_TZVPD'))
+                method = ORCA_DFT_FINAL()
+                cg.calculate_orca(method)
+
+                cg.copy_output(os.path.join(cg.dir_job, 'energy_TZVPD'))
 
             # CPCM
-            cg.setup_initial_structure(initial_rdkit_molecule_with_conformers, 'molecule', charge, title='CPCM calculation')
+            if not initial_rdkit_molecule_with_conformers:
+                cg.setup_initial_structure(smiles, 'smiles', charge, title='CPCM calculation')
+            else:
+                cg.setup_initial_structure(initial_rdkit_molecule_with_conformers, 'molecule', charge, title='CPCM calculation')
 
-            method = ORCA_XTB2_ALPB('water')
+
+            # skip steps if single ion
+            if not is_single_ion:
+                method = ORCA_XTB2_ALPB('water')
+                cg.calculate_orca(method)
+
+                cg.sort_by_energy()
+
+                cg.filter_by_energy_window(6 * kJ_per_kcal)
+
+                cg.filter_by_rms_window(rms_threshold=1.0)
+
+                cg.filter_by_maximum_number_of_conformers_to_keep(3)
+
+                method = ORCA_DFT_CPCM_FAST(cpcm_radii=cpcm_radii)
+                cg.calculate_orca(method)
+
+                cg.filter_by_energy_window(6 * kJ_per_kcal)
+
+                cg.filter_by_rms_window(rms_threshold=1.0)
+
+                cg.filter_by_maximum_number_of_conformers_to_keep(1)
+                
+            method = ORCA_DFT_CPCM_FINAL(cg.mol, cpcm_radii=cpcm_radii, cut_area_in_angstrom_squared=0.01, do_geometry_optimization=not is_single_ion)
             cg.calculate_orca(method)
-
-            cg.sort_by_energy()
-
-            cg.filter_by_energy_window(6 * kJ_per_kcal)
-
-            cg.filter_by_rms_window(rms_threshold=1.0)
-
-            cg.filter_by_maximum_number_of_conformers_to_keep(3)
-
-            method = ORCA_DFT_CPCM_FAST(cpcm_radii=cpcm_radii)
-            cg.calculate_orca(method)
-
-            cg.filter_by_energy_window(6 * kJ_per_kcal)
-
-            cg.filter_by_rms_window(rms_threshold=1.0)
-
-            cg.filter_by_maximum_number_of_conformers_to_keep(1)
             
-            method = ORCA_DFT_CPCM_FINAL(cg.mol, cpcm_radii=cpcm_radii, cut_area_in_angstrom_squared=0.01)
-            cg.calculate_orca(method)
-            
-            cg.save_to_disk(save_xyz_file=False, save_attached_file=True)
+            cg.save_to_disk(save_xyz_file=False, save_attached_file=True, save_last_log_file=True)
             cg.copy_output(os.path.join(cg.dir_job, 'COSMO_TZVPD'), ['*.xyz'])
             
         print()
