@@ -264,15 +264,23 @@ class SigmaProfileParser(UserDict):
 
         return segment_types, segment_type_areas
 
-    def cluster_and_create_sigma_profile(self, sigmas='seg_sigma_averaged', sigmas_range=np.arange(-0.15, 0.15, 0.001)):
+    def cluster_and_create_sigma_profile(self, sigmas='seg_sigma_averaged', sigmas_range=np.arange(-0.03, 0.03, 0.001)):
         if sigmas == 'seg_sigma_averaged':
             if 'seg_sigma_averaged' not in self:
                 self.calculate_averaged_sigmas()
 
         descriptors = [self[sigmas]]
         descriptor_ranges = [sigmas_range]
-        clustered_sigmas, areas = self.cluster_segments_into_segmenttypes(descriptors, descriptor_ranges)
-        return clustered_sigmas, areas
+        sp_areas = []
+        sp_sigmas = []
+        clustered_sigmas, clustered_areas = self.cluster_segments_into_segmenttypes(descriptors, descriptor_ranges)
+        for sigma in sigmas_range:
+            area = 0.0
+            if sigma in clustered_sigmas:
+                area = clustered_areas[clustered_sigmas == sigma][0]
+            sp_areas.append(area)
+            sp_sigmas.append(sigma)
+        return np.array(sp_sigmas), np.array(sp_areas)
 
     def calculate_averaged_sigmas(self, *, sigmas_raw=None, averaging_radius=0.5):
 
