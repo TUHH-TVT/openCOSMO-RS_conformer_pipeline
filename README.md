@@ -16,7 +16,7 @@ with file.inp beeing a TAB separated file similar to the following:
 
 name&nbsp;_[TAB]_&nbsp;SMILES&nbsp;_[TAB]_&nbsp;optional xyz file&nbsp;_[TAB]_&nbsp;charge&nbsp;_[TAB]_&nbsp;optional geometry optimization
 
-the optional geometry optimization assumes [0, False, no] to br False and everything else True.
+the optional geometry optimization column assumes [0, False, no] to be False and everything else to be True.
 
 Examples:
 ```
