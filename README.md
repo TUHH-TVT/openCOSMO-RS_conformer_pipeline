@@ -14,11 +14,13 @@ python ConformerGenerator.py --structures_file file.inp --cpcm_radii cpcm_radii.
 
 with file.inp beeing a TAB separated file similar to the following:
 
-name&nbsp;_[TAB]_&nbsp;SMILES&nbsp;_[TAB]_&nbsp;optional xyz file&nbsp;_[TAB]_&nbsp;charge
+name&nbsp;_[TAB]_&nbsp;SMILES&nbsp;_[TAB]_&nbsp;optional xyz file&nbsp;_[TAB]_&nbsp;charge&nbsp;_[TAB]_&nbsp;optional geometry optimization
+
+the optional geometry optimization assumes [0, False, no] to br False and everything else True.
 
 Examples:
 ```
-methane[TAB]C[TAB]xyz_file[TAB]0
+methane[TAB]C[TAB]xyz_file[TAB]0[TAB]True
 ethanol[TAB]CCO[TAB][TAB]0
 ```
 
