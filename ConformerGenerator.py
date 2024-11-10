@@ -84,23 +84,24 @@ class ConformerGenerator(object):
         return cls._balloon_executable
 
     @classmethod
-    def EmbedMolecule_with_balloon(cls, mol, numConfs=1):
+    def EmbedMolecule_with_balloon(cls, mol, number_of_conformers_to_generate=1):
 
         balloon_executable = cls.find_balloon_executable()
         # generate 3D structure without energy minimization
-        nConfsMissing = numConfs - mol.GetNumConformers()
+        number_of_conformers_missing = number_of_conformers_to_generate - mol.GetNumConformers()
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 
                 temporary_in_MOL_file = os.path.join(temp_dir, 'in.mol')
                 temporary_out_SDF_file = os.path.join(temp_dir, 'out.sdf')
                 Chem.MolToMolFile(mol, temporary_in_MOL_file)
-                command = f'{balloon_executable} --nconfs {nConfsMissing} --noGA --njobs 4 --randomSeed 42 --output-format sdf "{temporary_in_MOL_file}" "{temporary_out_SDF_file}"'
+                command = [balloon_executable, '--nconfs', str(number_of_conformers_missing), '--noGA', '--njobs', '4', '--randomSeed', '42', '--output-format', 'sdf', temporary_in_MOL_file, temporary_out_SDF_file]
                 _ = spr.run(command, capture_output=True)
                 
                 with Chem.SDMolSupplier(temporary_out_SDF_file, removeHs=False, sanitize=False) as suppl:
                     for conf_mol in suppl:
                         conf = Chem.Conformer(conf_mol.GetConformer())
+                        conf.SetDoubleProp('energy', conf_mol.GetDoubleProp('energy')) # kcal/mol
                         mol.AddConformer(conf, assignId=True)
 
             return 0
@@ -189,15 +190,16 @@ class ConformerGenerator(object):
     @staticmethod
     def calculate_best_rms(probe_molecule, reference_molecule, 
                             probe_molecule_conformer_index=0, reference_molecule_conformer_index=0,
-                            rms_only_heavy_atoms=True):
+                            rms_only_heavy_atoms=True,
+                            sanitize=False):
 
         # make the appropriate copy to not modify input
         if rms_only_heavy_atoms:
-            probe_mol = Chem.RemoveHs(probe_molecule)
-            reference_mol = Chem.RemoveHs(reference_molecule)
+            probe_mol = Chem.RemoveHs(probe_molecule, sanitize=sanitize)
+            reference_mol = Chem.RemoveHs(reference_molecule, sanitize=sanitize)
         else:
-            probe_mol = Chem.Mol(probe_molecule)
-            reference_mol = Chem.Mol(reference_molecule)
+            probe_mol = Chem.Mol(probe_molecule, sanitize=sanitize)
+            reference_mol = Chem.Mol(reference_molecule, sanitize=sanitize)
 
         return rdMolAlign.GetBestRMS(probe_mol, reference_mol,
                                     probe_molecule_conformer_index, reference_molecule_conformer_index)
@@ -263,33 +265,38 @@ class ConformerGenerator(object):
             self._cleanup()            
             print(f'end: {self.name}, time_spent: {"{:.2f}".format(time.monotonic() - self._start_time)} s')
 
-    def setup_initial_structure(self, input_value, input_mode, charge, title=None):
-        if input_mode not in ['smiles', 'xyz', 'molecule', 'smiles_and_xyz']:
-            raise ValueError(f'Invalid input mode: {input_mode}')
+    def setup_initial_structure(self, smiles_or_molecule, xyz_file=None, charge=None, title=None):
 
-        if input_mode == 'molecule':
-            self.smiles = Chem.MolToSmiles(input_value)
-            if len(input_value.GetConformers()) > 0:
-                self.mol = input_value
+        self.smiles = None
+        self.mol = None
+
+        try:            
+            if isinstance(xyz_file, str):
+                xyz_file = xyz_file.strip()
+                if not xyz_file:
+                    xyz_file = None
+
+            if isinstance(smiles_or_molecule, str):
+                smiles_or_molecule = smiles_or_molecule.strip()
+                if smiles_or_molecule:
+                    self.smiles = smiles_or_molecule
+                    self.mol = ConformerGenerator.get_embedded_mol(self.smiles, xyz_file, charge)
             else:
-                self.mol = ConformerGenerator.get_embedded_mol(self.smiles)
-
-        if input_mode == 'smiles':
-            self.smiles = input_value
-            self.mol = ConformerGenerator.get_embedded_mol(self.smiles) 
-
-        if input_mode in ['xyz', 'smiles_and_xyz']:
-            try:
-                if input_mode == 'smiles_and_xyz':
-                    self.smiles = input_value[0]
-                    self.mol = ConformerGenerator.get_embedded_mol(self.smiles, input_value[1], charge)
+                self.smiles = Chem.MolToSmiles(smiles_or_molecule)
+                if len(smiles_or_molecule.GetConformers()) > 0 and not xyz_file:
+                    self.mol = smiles_or_molecule
                 else:
-                    self.mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
-                    self.smiles = Chem.MolToSmiles(self.mol)
+                    self.mol = ConformerGenerator.get_embedded_mol(self.smiles, xyz_file, charge)
 
-            except Exception:
-                self.smiles = None
-                self.mol = None     
+            if xyz_file:
+                if not self.smiles:
+                        self.mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+                        self.smiles = Chem.MolToSmiles(self.mol)
+
+        except Exception:
+            self.smiles = None
+            self.mol = None
+            raise ValueError(f'The structure could not be setup using the given values, {smiles_or_molecule=}, {xyz_file=}, {charge=}')
 
         self.charge = Chem.rdmolops.GetFormalCharge(self.mol)
         self.multiplicity = ConformerGenerator.calculate_multiplicity(self.mol, charge)
@@ -438,54 +445,68 @@ class ConformerGenerator(object):
             z = atom_positions[i, 2]
             conf.SetAtomPosition(i, Point3D(x,y,z))
 
-    def calculate_rdkit(self, number_of_conformers_generated=None, rms_threshold=0.5, rms_only_heavy_atoms=True, fallback_on_balloon_for_conformer_generation=True):
+    def calculate_rdkit(self, number_of_conformers_to_generate=None, rms_threshold=0.5, rms_only_heavy_atoms=True, fallback_on_balloon_for_conformer_generation=True):
 
-        if number_of_conformers_generated is None:
+        if number_of_conformers_to_generate is None:
             temp = self.mol
             try:
                 temp = Chem.RemoveHs(self.mol)
             except Exception:
                 pass
-            number_of_rotable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(temp)
+            try:
+                number_of_rotable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(temp)
+            except Exception:
+                number_of_rotable_bonds = 8 # in case errors happen, use middle heuristic
 
             # heuristic taken from https://doi.org/10.1021/ci2004658
             if number_of_rotable_bonds <= 7:
-                number_of_conformers_generated = 50
+                number_of_conformers_to_generate = 50
             if number_of_rotable_bonds >= 8 and number_of_rotable_bonds <= 12:
-                number_of_conformers_generated = 200
+                number_of_conformers_to_generate = 200
             if number_of_rotable_bonds >= 13:
-                number_of_conformers_generated = 300
+                number_of_conformers_to_generate = 300
 
-        print(f'- settings used: [number_of_conformers_generated: {number_of_conformers_generated}, rms_threshold: {rms_threshold}, rms_only_heavy_atoms: {rms_only_heavy_atoms}]')
+        print(f'- settings used: [number_of_conformers_generated: {number_of_conformers_to_generate}, rms_threshold: {rms_threshold}, rms_only_heavy_atoms: {rms_only_heavy_atoms}]')
 
         should_skip_step_execution = self._add_step('rdkit_generate_conformers')
 
         if not should_skip_step_execution:
             self.save_to_disk(output_folder=os.path.join(self._dir_step, 'in'))
 
-            _ = Chem.AllChem.EmbedMultipleConfs(
-                self.mol, numConfs=number_of_conformers_generated,
-                randomSeed=0xf00d)
-            
-            if self.mol.GetNumConformers() != number_of_conformers_generated:
+            try:
                 _ = Chem.AllChem.EmbedMultipleConfs(
-                    self.mol, numConfs=number_of_conformers_generated,
-                    randomSeed=0xf00d, useRandomCoords=True)
+                    self.mol, numConfs=number_of_conformers_to_generate,
+                    randomSeed=0xf00d)
+                
+                if self.mol.GetNumConformers() != number_of_conformers_to_generate:
+                    _ = Chem.AllChem.EmbedMultipleConfs(
+                        self.mol, numConfs=number_of_conformers_to_generate,
+                        randomSeed=0xf00d, useRandomCoords=True)
 
-            if self.mol.GetNumConformers() != number_of_conformers_generated and fallback_on_balloon_for_conformer_generation:
-                _ = self.EmbedMolecule_with_balloon(self.mol, number_of_conformers_generated)
+                if Chem.AllChem.MMFFHasAllMoleculeParams(self.mol):
+                    optimized_energies = Chem.AllChem.MMFFOptimizeMoleculeConfs(
+                        self.mol, numThreads=4, maxIters=2000)
+                else:
+                    if Chem.AllChem.UFFHasAllMoleculeParams(self.mol):
+                        optimized_energies = Chem.AllChem.UFFOptimizeMoleculeConfs(
+                            self.mol, numThreads=4, maxIters=2000)
+                            
+                energies = np.array([res[1] for res in optimized_energies])
+                did_not_converge = np.array([res[0] for res in optimized_energies])
+                            
+            except Exception:
+                pass
 
-            if Chem.AllChem.MMFFHasAllMoleculeParams(self.mol):
-                mmff_optimized = Chem.AllChem.MMFFOptimizeMoleculeConfs(
-                    self.mol, numThreads=4, maxIters=2000)
-            else:
-                mmff_optimized = Chem.AllChem.UFFOptimizeMoleculeConfs(
-                    self.mol, numThreads=4, maxIters=2000)
+            if self.mol.GetNumConformers() != number_of_conformers_to_generate and fallback_on_balloon_for_conformer_generation:
+                _ = self.EmbedMolecule_with_balloon(self.mol, number_of_conformers_to_generate)
+                print(f'- rdkit conformer generation failed, balloon (MMF94) was used instead')
 
-            energies = np.array([res[1] for res in mmff_optimized])
-            did_not_converge = np.array([res[0] for res in mmff_optimized])
+                energies = np.array([conf.GetDoubleProp('energy') for conf in self.mol.GetConformers()])
+                # I don't know if these always converge, but I have insufficient examples to know
+                did_not_converge = np.zeros_like(energies, dtype='bool')
 
-            # for some ionic structures, the ions are overlapping
+
+            # for some structures, the atoms are overlapping
             # this filters them out if someone knows a better ways to deal with 
             # this, please tell me
             def has_overlapping_atoms(conformer_idx, threshold = 0.1):
@@ -937,11 +958,12 @@ class ORCA_DFT_FAST(ORCA):
             file.write('\n'.join(lines))
 
 class ORCA_DFT_FINAL(ORCA):
-    def __init__(self, method_description='DFT_BP86_def2-TZVP+def2-TZVPD_SP', step_name='ORCA_DFT_final'):
+    def __init__(self, method_description='DFT_BP86_def2-TZVP+def2-TZVPD_SP', step_name='ORCA_DFT_final', do_geometry_optimization=True):
 
         super().__init__(method_description=method_description, step_name=step_name)
 
         self.filename_base = 'geo_opt_tzvp'
+        self.do_geometry_optimization = do_geometry_optimization
 
         self.filename_final_xyz = f'{self.filename_base}.xyz'
         self.filename_final_base = 'single_point_tzvpd'
@@ -956,17 +978,18 @@ class ORCA_DFT_FINAL(ORCA):
         if self._n_cores > 1:
             parallel_string = f' PAL{self._n_cores}'
 
-        lines.append(f'! DFT {self.optimize_kw} BP86 def2-TZVP{parallel_string}')
-        lines.append('')
+        if self.do_geometry_optimization:
+            lines.append(f'! DFT {self.optimize_kw} BP86 def2-TZVP{parallel_string}')
+            lines.append('')
 
-        lines.append(f'%base "{self.filename_base}"')
-        lines.append('')
+            lines.append(f'%base "{self.filename_base}"')
+            lines.append('')
 
-        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
-        lines.append('')
+            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
+            lines.append('')
 
-        lines.append('$new_job')
-        lines.append('')
+            lines.append('$new_job')
+            lines.append('')
 
         lines.append(f'! def2-TZVPD SP{parallel_string}')
         lines.append('')
@@ -974,6 +997,9 @@ class ORCA_DFT_FINAL(ORCA):
         lines.append(f'%base "{self.filename_final_base}"')
         lines.append('')
 
+        if not self.do_geometry_optimization:
+            self.filename_final_xyz = self.filename
+            
         lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename_final_xyz}')
         lines.append('')
 
@@ -1100,11 +1126,9 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
         lines.append(f'%base "{self.filename_final_base}"')
         lines.append('')
 
-        if self.do_geometry_optimization:
-            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename_final_xyz}')
-        else:
+        if not self.do_geometry_optimization:
             self.filename_final_xyz = self.filename
-            lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename}')
+        lines.append(f'* xyzfile {self.charge} {self.multiplicity} {self.filename_final_xyz}')
         lines.append('')
 
         with open(self.filename_input, 'w') as file:
@@ -1145,12 +1169,19 @@ if __name__ == "__main__":
     with open(args.structures_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
         for line in reader:
-            if len(line) != 4:
+            if len(line) not in [4, 5]:
                 raise ValueError(f'Following line does not contain 4 values seperated by tabs [name, SMILES, xyz_file, charge]: {line}')
             else:
+                do_geometry_optimization = True
+                if len(line) == 5:
+                    name, smiles, xyz_file, charge, do_geometry_optimization = [val.strip() for val in line]
+                    if do_geometry_optimization:
+                        if do_geometry_optimization.lower() in ['0', 'no', 'false']:
+                            do_geometry_optimization = False
+                else:
+                    name, smiles, xyz_file, charge = [val.strip() for val in line]
                 mol = None
-                name, smiles, xyz_file, charge = [val.strip() for val in line]
-                name_smiles_dct[name] = (smiles, xyz_file, int(charge))
+                name_smiles_dct[name] = (smiles, xyz_file, int(charge), do_geometry_optimization)
                 if len(smiles) > 0:
                     mol = Chem.MolFromSmiles(smiles, sanitize=False)
                     mol.UpdatePropertyCache(strict=False)
@@ -1178,48 +1209,52 @@ if __name__ == "__main__":
         if len(atomic_numbers_without_radii) > 0:
             raise RuntimeError(f'No CPCM radii were specified for the following atomic numbers: {sorted(atomic_numbers_without_radii)}')
 
-    for (name, (smiles, xyz_file, charge)), n_atoms in zip(name_smiles_dct.items(), number_of_atoms, strict=True):
+    for (name, (smiles, xyz_file, charge, do_geometry_optimization)), n_atoms in zip(name_smiles_dct.items(), number_of_atoms, strict=True):
 
         with ConformerGenerator(name, continue_calculation=args.continue_calculation, n_cores=args.n_cores) as cg:
 
-            is_single_ion = n_atoms == 1 and charge != 0
+            is_single_atom = n_atoms == 1
+            is_single_ion = is_single_atom and not charge != 0
+            if is_single_atom:
+                do_geometry_optimization = False
 
             # skip gas phase calculation if single ion
             initial_rdkit_molecule_with_conformers = None
             if not is_single_ion:
                 # # gas
-                n = cg.setup_initial_structure(smiles, 'smiles', charge, title='gas calculation')
-                
-                cg.calculate_rdkit(rms_threshold=1.0)
+                n = cg.setup_initial_structure(smiles, xyz_file, charge, title='gas calculation')
+               
+                if do_geometry_optimization: 
+                    cg.calculate_rdkit(rms_threshold=1.0)
 
-                cg.sort_by_energy()
+                    cg.sort_by_energy()
 
-                cg.filter_by_energy_window(6 * kJ_per_kcal)
+                    cg.filter_by_energy_window(6 * kJ_per_kcal)
 
-                cg.filter_by_rms_window(rms_threshold=1.0)
-                initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) # create copy for later
+                    cg.filter_by_rms_window(rms_threshold=1.0)
+                    initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) # create copy for later
 
-                method = ORCA_DFT_FAST()
-                cg.calculate_orca(method)
+                    method = ORCA_DFT_FAST()
+                    cg.calculate_orca(method)
 
-                cg.sort_by_energy()
+                    cg.sort_by_energy()
 
-                cg.filter_by_function(lambda conformers: [0])
+                    cg.filter_by_function(lambda conformers: [0])
 
-                method = ORCA_DFT_FINAL()
+                method = ORCA_DFT_FINAL(do_geometry_optimization=do_geometry_optimization)
                 cg.calculate_orca(method)
 
                 cg.copy_output(os.path.join(cg.dir_job, 'energy_TZVPD'))
 
             # CPCM
             if not initial_rdkit_molecule_with_conformers:
-                cg.setup_initial_structure(smiles, 'smiles', charge, title='CPCM calculation')
+                cg.setup_initial_structure(smiles, xyz_file, charge, title='CPCM calculation')
             else:
-                cg.setup_initial_structure(initial_rdkit_molecule_with_conformers, 'molecule', charge, title='CPCM calculation')
+                cg.setup_initial_structure(initial_rdkit_molecule_with_conformers, xyz_file, charge, title='CPCM calculation')
 
 
-            # skip steps if single ion
-            if not is_single_ion:
+            # skip steps if single atoms
+            if do_geometry_optimization:
                 method = ORCA_XTB2_ALPB('water')
                 cg.calculate_orca(method)
 
@@ -1240,7 +1275,7 @@ if __name__ == "__main__":
 
                 cg.filter_by_maximum_number_of_conformers_to_keep(1)
                 
-            method = ORCA_DFT_CPCM_FINAL(cg.mol, cpcm_radii=cpcm_radii, cut_area_in_angstrom_squared=0.01, do_geometry_optimization=not is_single_ion)
+            method = ORCA_DFT_CPCM_FINAL(cg.mol, cpcm_radii=cpcm_radii, cut_area_in_angstrom_squared=0.01, do_geometry_optimization=do_geometry_optimization)
             cg.calculate_orca(method)
             
             cg.save_to_disk(save_xyz_file=False, save_attached_file=True, save_last_log_file=True)
