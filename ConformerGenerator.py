@@ -53,11 +53,38 @@ class ExecutableFinder:
 class ConformerGenerator(object):
 
     @staticmethod
-    def get_mol_from_xyz(xyz_file, charge):
-        xyz_mol = Chem.MolFromXYZFile(xyz_file)
-        rdDetermineBonds.DetermineBonds(xyz_mol, charge=charge)
+    def get_mol_from_xyz(xyz_file, charge, fallback_xyz2mol_vdw=False, vdw_covalent_factor=1.3):
+        try:
+            xyz_mol = Chem.MolFromXYZFile(xyz_file)
+            rdDetermineBonds.DetermineBonds(xyz_mol, charge=charge)
+        except Exception:
+            xyz_mol = None
+
+        # sometimes this does not work, so we allow falling back on the original xy2mol algorithm
+        # more details: https://github.com/rdkit/rdkit/issues/8006
+        if not xyz_mol and fallback_xyz2mol_vdw:
+            conformer, atom_symbols, comment = ConformerGenerator.load_conformer_from_xyz_file(xyz_file)
+            rwMol = Chem.RWMol()
+            for symbol in atom_symbols:
+                atom = Chem.Atom(symbol)
+                rwMol.AddAtom(atom)  
+            rwMol.AddConformer(conformer)
+
+            dMat = Chem.Get3DDistanceMatrix(rwMol)
+            pt = Chem.GetPeriodicTable()
+            num_atoms = rwMol.GetNumAtoms()
+            for i in range(num_atoms):
+                a_i = rwMol.GetAtomWithIdx(i)
+                Rcov_i = pt.GetRcovalent(a_i.GetAtomicNum()) * vdw_covalent_factor
+                for j in range(i + 1, num_atoms):
+                    a_j = rwMol.GetAtomWithIdx(j)
+                    Rcov_j = pt.GetRcovalent(a_j.GetAtomicNum()) * vdw_covalent_factor
+                    if dMat[i, j] <= Rcov_i + Rcov_j:
+                        rwMol.AddBond(i, j, Chem.BondType.SINGLE)
+
+            xyz_mol = rwMol.GetMol()
         return xyz_mol
-    
+
     # should work for ground state properties of neutrals and ions
     @staticmethod
     def calculate_multiplicity(molecule, charge):
@@ -145,7 +172,7 @@ class ConformerGenerator(object):
                     pass
 
         else:
-            xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+            xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge, fallback_xyz2mol_vdw=True)
             mol = AllChem.AssignBondOrdersFromTemplate(mol, xyz_mol)
 
         mol.GetConformer(0).SetDoubleProp('energy', 0)
@@ -290,8 +317,8 @@ class ConformerGenerator(object):
 
             if xyz_file:
                 if not self.smiles:
-                        self.mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
-                        self.smiles = Chem.MolToSmiles(self.mol)
+                    self.mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+                    self.smiles = Chem.MolToSmiles(self.mol)
 
         except Exception:
             self.smiles = None
@@ -736,8 +763,6 @@ class ConformerGenerator(object):
             if save_last_log_file:
                 shutil.copy(os.path.join(self._dir_step,'calculate',conformer_basename,'log_output.dat'), os.path.join(output_folder, 'log_output.dat'))
             
-
-
     def copy_output(self, destination_folder, excluded_extensions=[], step_number=-1):
         shutil.copytree(os.path.join(self.dir_job, self.step_folders[step_number], 'out'),
                 destination_folder, ignore=shutil.ignore_patterns(*excluded_extensions),
