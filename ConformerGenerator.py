@@ -10,7 +10,9 @@ import tempfile
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem.AllChem import AssignBondOrdersFromTemplate
+from rdkit.Chem import rdForceFieldHelpers
+from rdkit.Chem import rdDistGeom
 from rdkit.Chem import rdDetermineBonds
 from rdkit.Chem import rdMolAlign
 from rdkit.Geometry import Point3D
@@ -53,36 +55,41 @@ class ExecutableFinder:
 class ConformerGenerator(object):
 
     @staticmethod
-    def get_mol_from_xyz(xyz_file, charge, fallback_xyz2mol_vdw=False, vdw_covalent_factor=1.3):
-        try:
-            xyz_mol = Chem.MolFromXYZFile(xyz_file)
-            rdDetermineBonds.DetermineBonds(xyz_mol, charge=charge)
-        except Exception:
-            xyz_mol = None
+    def get_mol_from_xyz(xyz_file, charge, use_xyz2mol_vdw=False, vdw_covalent_factor=1.3):
 
-        # sometimes this does not work, so we allow falling back on the original xy2mol algorithm
-        # more details: https://github.com/rdkit/rdkit/issues/8006
-        if not xyz_mol and fallback_xyz2mol_vdw:
-            conformer, atom_symbols, comment = ConformerGenerator.load_conformer_from_xyz_file(xyz_file)
-            rwMol = Chem.RWMol()
-            for symbol in atom_symbols:
-                atom = Chem.Atom(symbol)
-                rwMol.AddAtom(atom)  
-            rwMol.AddConformer(conformer)
+        
+        xyz_mol = None
+        if use_xyz2mol_vdw != 'force':
+            try:
+                xyz_mol = Chem.MolFromXYZFile(xyz_file)
+                rdDetermineBonds.DetermineBonds(xyz_mol, charge=charge)
+            except Exception:
+                xyz_mol = None
 
-            dMat = Chem.Get3DDistanceMatrix(rwMol)
-            pt = Chem.GetPeriodicTable()
-            num_atoms = rwMol.GetNumAtoms()
-            for i in range(num_atoms):
-                a_i = rwMol.GetAtomWithIdx(i)
-                Rcov_i = pt.GetRcovalent(a_i.GetAtomicNum()) * vdw_covalent_factor
-                for j in range(i + 1, num_atoms):
-                    a_j = rwMol.GetAtomWithIdx(j)
-                    Rcov_j = pt.GetRcovalent(a_j.GetAtomicNum()) * vdw_covalent_factor
-                    if dMat[i, j] <= Rcov_i + Rcov_j:
-                        rwMol.AddBond(i, j, Chem.BondType.SINGLE)
+        if use_xyz2mol_vdw in ['force', 'fallback']:
+            # sometimes this does not work, so we allow falling back on the original xy2mol algorithm
+            # more details: https://github.com/rdkit/rdkit/issues/8006
+            if use_xyz2mol_vdw == 'force' or not xyz_mol:
+                conformer, atom_symbols, comment = ConformerGenerator.load_conformer_from_xyz_file(xyz_file)
+                rwMol = Chem.RWMol()
+                for symbol in atom_symbols:
+                    atom = Chem.Atom(symbol)
+                    rwMol.AddAtom(atom)  
+                rwMol.AddConformer(conformer)
 
-            xyz_mol = rwMol.GetMol()
+                dMat = Chem.Get3DDistanceMatrix(rwMol)
+                pt = Chem.GetPeriodicTable()
+                num_atoms = rwMol.GetNumAtoms()
+                for i in range(num_atoms):
+                    a_i = rwMol.GetAtomWithIdx(i)
+                    Rcov_i = pt.GetRcovalent(a_i.GetAtomicNum()) * vdw_covalent_factor
+                    for j in range(i + 1, num_atoms):
+                        a_j = rwMol.GetAtomWithIdx(j)
+                        Rcov_j = pt.GetRcovalent(a_j.GetAtomicNum()) * vdw_covalent_factor
+                        if dMat[i, j] <= Rcov_i + Rcov_j:
+                            rwMol.AddBond(i, j, Chem.BondType.SINGLE)
+
+                xyz_mol = rwMol.GetMol()
         return xyz_mol
 
     # should work for ground state properties of neutrals and ions
@@ -146,35 +153,44 @@ class ConformerGenerator(object):
                 mol.UpdatePropertyCache(strict=False)    
         
         if mol is None:
-            raise ValueError('Could not generate mol struct from smiles: {}'.
-                             format(smiles))
+            raise ValueError(f'Could not generate mol struct from smiles: {smiles}')
 
         if xyz_file is None:    
             mol = Chem.AddHs(mol)
             retVal = -1
             try:
-                retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d)
+                retVal = rdDistGeom.EmbedMolecule(mol, randomSeed=0xf00d)
             except Exception:
                 pass
-            if retVal < 0 :
+            if retVal < 0:
                 try:
-                    retVal = AllChem.EmbedMolecule(mol, randomSeed=0xf00d, useRandomCoords=True)
+                    retVal = rdDistGeom.EmbedMolecule(mol, randomSeed=0xf00d, useRandomCoords=True)
                 except Exception:
                     pass
 
-            if retVal < 0 :
+            if retVal < 0:
                 retVal = cls.EmbedMolecule_with_balloon(mol)
-            if retVal == 0 :
-                try:
-                    if AllChem.UFFOptimizeMolecule(mol) != 0 :
-                        AllChem.UFFOptimizeMolecule(mol, maxIters=10000)
-                except Exception:
-                    pass
-
+            if retVal == 0:
+                structure_was_optimized_successfully = False
+                if rdForceFieldHelpers.MMFFHasAllMoleculeParams(mol):
+                    structure_was_optimized_successfully = rdForceFieldHelpers.MMFFOptimizeMolecule(mol) != 0
+                    if not structure_was_optimized_successfully:
+                        structure_was_optimized_successfully = rdForceFieldHelpers.MMFFOptimizeMolecule(mol, maxIters=10000) != 0
+                
+                if not structure_was_optimized_successfully:
+                    if rdForceFieldHelpers.UFFHasAllMoleculeParams(mol):
+                        structure_was_optimized_successfully = rdForceFieldHelpers.UFFOptimizeMolecule(mol) != 0
+                        if not structure_was_optimized_successfully:
+                            rdForceFieldHelpers.UFFOptimizeMolecule(mol, maxIters=10000)
         else:
-            xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge, fallback_xyz2mol_vdw=True)
-            mol = AllChem.AssignBondOrdersFromTemplate(mol, xyz_mol)
+            try:
+                xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+                mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
+            except Exception:
+                xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge, use_xyz2mol_vdw='force')
+                mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
 
+            mol.UpdatePropertyCache(strict=False)
         mol.GetConformer(0).SetDoubleProp('energy', 0)
 
         return mol
@@ -501,21 +517,21 @@ class ConformerGenerator(object):
             self.save_to_disk(output_folder=os.path.join(self._dir_step, 'in'))
 
             try:
-                _ = Chem.AllChem.EmbedMultipleConfs(
+                _ = rdDistGeom.EmbedMultipleConfs(
                     self.mol, numConfs=number_of_conformers_to_generate,
                     randomSeed=0xf00d)
                 
                 if self.mol.GetNumConformers() != number_of_conformers_to_generate:
-                    _ = Chem.AllChem.EmbedMultipleConfs(
+                    _ = rdDistGeom.EmbedMultipleConfs(
                         self.mol, numConfs=number_of_conformers_to_generate,
                         randomSeed=0xf00d, useRandomCoords=True)
 
-                if Chem.AllChem.MMFFHasAllMoleculeParams(self.mol):
-                    optimized_energies = Chem.AllChem.MMFFOptimizeMoleculeConfs(
+                if rdForceFieldHelpers.MMFFHasAllMoleculeParams(self.mol):
+                    optimized_energies = rdForceFieldHelpers.MMFFOptimizeMoleculeConfs(
                         self.mol, numThreads=4, maxIters=2000)
                 else:
-                    if Chem.AllChem.UFFHasAllMoleculeParams(self.mol):
-                        optimized_energies = Chem.AllChem.UFFOptimizeMoleculeConfs(
+                    if rdForceFieldHelpers.UFFHasAllMoleculeParams(self.mol):
+                        optimized_energies = rdForceFieldHelpers.UFFOptimizeMoleculeConfs(
                             self.mol, numThreads=4, maxIters=2000)
                             
                 energies = np.array([res[1] for res in optimized_energies])
@@ -1274,6 +1290,14 @@ if __name__ == "__main__":
             # CPCM
             if not initial_rdkit_molecule_with_conformers:
                 cg.setup_initial_structure(smiles, xyz_file, charge, title='CPCM calculation')
+                if do_geometry_optimization: 
+                    cg.calculate_rdkit(rms_threshold=1.0)
+
+                    cg.sort_by_energy()
+
+                    cg.filter_by_energy_window(6 * kJ_per_kcal)
+
+                    cg.filter_by_rms_window(rms_threshold=1.0)
             else:
                 cg.setup_initial_structure(initial_rdkit_molecule_with_conformers, xyz_file, charge, title='CPCM calculation')
 
