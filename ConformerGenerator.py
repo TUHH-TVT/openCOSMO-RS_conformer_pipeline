@@ -714,6 +714,8 @@ class ConformerGenerator(object):
                 self.mol.GetConformer(idx).SetDoubleProp(
                     "energy", energy_in_kJdivmol / kJdivmol_per_hartree
                 )
+                # has_overlaping_atoms will become unnecessary
+                # it was fixed here: https://github.com/rdkit/rdkit/pull/8264
                 idx_to_keep[idx] = not has_overlapping_atoms(idx)
 
             idx_to_keep[did_not_converge] = False
