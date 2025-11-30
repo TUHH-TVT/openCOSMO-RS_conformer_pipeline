@@ -1143,6 +1143,8 @@ class ORCA(ABC):
             with open(self.filename_final_log, "r") as log_file:
                 terminated_normally = False
                 did_not_converge = False
+                polarizabilities = False
+                polarizability_tensor = []
                 for line in log_file:
                     if "****ORCA TERMINATED NORMALLY****" in line:
                         terminated_normally = True
@@ -1154,6 +1156,13 @@ class ORCA(ABC):
 
                     if line.strip().startswith("x,y,z [Debye]:"):
                         dipole_moment = " ".join(line.strip().split()[-3:])
+                    tensor_match = re.match(r".*XX\s+YY\s+ZZ\s+XY\s+XZ\s+YZ.+", line)
+                    if tensor_match:
+                        polarizabilities = True
+                    if polarizabilities:
+                        polarizability_tensor.append(line)
+                    if "Sum polar" in line:
+                        polarizabilities = False
 
                 if not terminated_normally or did_not_converge:
                     raise RuntimeError(
@@ -1200,6 +1209,12 @@ class ORCA(ABC):
                         + "\n"
                     )
                     file.write(line)
+
+            if len(polarizability_tensor) > 0:
+                file.write("\n" + "#" * 50 + "\n")
+                file.write("#ATOMIC POLARIZABILITIES\n")
+                for line in polarizability_tensor:
+                    file.write(f"{line}")
 
 
 class ORCA_XTB2_ALPB(ORCA):
@@ -1397,6 +1412,7 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
         cpcm_radii=None,
         cut_area_in_angstrom_squared=None,
         do_geometry_optimization=True,
+        calculate_atomic_polarizabilities=True,
     ):
 
         super().__init__(
@@ -1408,7 +1424,7 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
 
         self.filename_base = "geo_opt_tzvp"
         self.do_geometry_optimization = do_geometry_optimization
-
+        self.calculate_atomic_polarizabilities = calculate_atomic_polarizabilities
         self.filename_final_xyz = f"{self.filename_base}.xyz"
         self.filename_final_base = "single_point_tzvpd"
         self.filename_final_cpcm = f"{self.filename_final_base}.cpcm"
@@ -1449,8 +1465,23 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
             lines.append("$new_job")
             lines.append("")
 
+        # in ORCA 6.0 there is a bug leading to paralell polarizability calculations to be wrong
+        # in a future version this might be unnecessary
+        if self.calculate_atomic_polarizabilities:
+            parallel_string = ""
+
         lines.append(f"! CPCM BP86 def2-TZVPD SP{parallel_string}")
         lines.append("")
+
+        if self.calculate_atomic_polarizabilities:
+            lines.append(f"%elprop")
+            lines.append("")
+            lines.append(f"        Polar 1")
+            lines.append("")
+            lines.append(f"        Polaratom 1")
+            lines.append("")
+            lines.append(f"end")
+            lines.append("")
 
         lines.append(f'%base "{self.filename_final_base}"')
         lines.append("")
