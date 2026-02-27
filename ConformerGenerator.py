@@ -181,6 +181,7 @@ class ConformerGenerator(object):
             mol = Chem.MolFromSmiles(smiles, sanitize=False)
             if mol is not None:
                 mol.UpdatePropertyCache(strict=False)
+                Chem.GetSSSR(mol)
 
         if mol is None:
             raise ValueError(f"Could not generate mol struct from smiles: {smiles}")
@@ -202,7 +203,7 @@ class ConformerGenerator(object):
 
             if retVal < 0:
                 retVal = cls.EmbedMolecule_with_balloon(mol)
-            if retVal == 0:
+            if retVal == 0 and mol.GetNumAtoms() > 2:
                 structure_was_optimized_successfully = False
                 if rdForceFieldHelpers.MMFFHasAllMoleculeParams(mol):
                     structure_was_optimized_successfully = (
@@ -218,11 +219,14 @@ class ConformerGenerator(object):
 
                 if not structure_was_optimized_successfully:
                     if rdForceFieldHelpers.UFFHasAllMoleculeParams(mol):
-                        structure_was_optimized_successfully = (
-                            rdForceFieldHelpers.UFFOptimizeMolecule(mol) != 0
-                        )
-                        if not structure_was_optimized_successfully:
-                            rdForceFieldHelpers.UFFOptimizeMolecule(mol, maxIters=10000)
+                        try:
+                            structure_was_optimized_successfully = (
+                                rdForceFieldHelpers.UFFOptimizeMolecule(mol) != 0
+                            )
+                            if not structure_was_optimized_successfully:
+                                rdForceFieldHelpers.UFFOptimizeMolecule(mol, maxIters=10000)
+                        except Exception:
+                            pass
         else:
             try:
                 xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
@@ -658,7 +662,7 @@ class ConformerGenerator(object):
                         randomSeed=0xF00D,
                         useRandomCoords=True,
                     )
-
+                optimized_energies = []
                 if rdForceFieldHelpers.MMFFHasAllMoleculeParams(self.mol):
                     optimized_energies = rdForceFieldHelpers.MMFFOptimizeMoleculeConfs(
                         self.mol, numThreads=4, maxIters=2000
@@ -670,9 +674,11 @@ class ConformerGenerator(object):
                                 self.mol, numThreads=4, maxIters=2000
                             )
                         )
-
-                energies = np.array([res[1] for res in optimized_energies])
-                did_not_converge = np.array([res[0] for res in optimized_energies])
+                if optimized_energies:
+                    energies = np.array([res[1] for res in optimized_energies])
+                    did_not_converge = np.array([res[0] for res in optimized_energies])
+                else:
+                    self.mol.RemoveAllConformers()
 
             except Exception:
                 pass
@@ -777,7 +783,7 @@ class ConformerGenerator(object):
                 output_filepath = os.path.join(
                     dir_struct, f"{conformer_basename}.orcacosmo"
                 )
-                spp = SigmaProfileParser(output_filepath, "orca")
+                spp = SigmaProfileParser(output_filepath)
 
                 self.mol.GetConformer(conformer_index).SetProp(
                     "attached_file", output_filepath
