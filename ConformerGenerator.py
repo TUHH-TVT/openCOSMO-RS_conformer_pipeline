@@ -1613,7 +1613,7 @@ if __name__ == "__main__":
         ) as cg:
 
             is_single_atom = n_atoms == 1
-            is_single_ion = is_single_atom and not charge != 0
+            is_single_ion = is_single_atom and charge != 0
             if is_single_atom:
                 do_geometry_optimization = False
 
