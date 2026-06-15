@@ -294,13 +294,13 @@ class ConformerGenerator(object):
         sanitize=False,
     ):
 
-        # make the appropriate copy to not modify input
+	# make the appropriate copy to not modify input
         if rms_only_heavy_atoms:
             probe_mol = Chem.RemoveHs(probe_molecule, sanitize=sanitize)
             reference_mol = Chem.RemoveHs(reference_molecule, sanitize=sanitize)
         else:
-            probe_mol = Chem.Mol(probe_molecule, sanitize=sanitize)
-            reference_mol = Chem.Mol(reference_molecule, sanitize=sanitize)
+            probe_mol = Chem.Mol(probe_molecule) #removed sanitize
+            reference_mol = Chem.Mol(reference_molecule) #removed sanitize
 
         return rdMolAlign.GetBestRMS(
             probe_mol,
@@ -1626,16 +1626,13 @@ if __name__ == "__main__":
                 )
 
                 if do_geometry_optimization:
-                    cg.calculate_rdkit(rms_threshold=1.0)
+                    cg.calculate_rdkit(rms_threshold=0.1, rms_only_heavy_atoms=False)
 
                     cg.sort_by_energy()
 
                     cg.filter_by_energy_window(6 * kJ_per_kcal)
 
                     cg.filter_by_rms_window(rms_threshold=1.0)
-                    initial_rdkit_molecule_with_conformers = Chem.Mol(
-                        cg.mol
-                    )  # create copy for later
 
                     method = ORCA_DFT_FAST()
                     cg.calculate_orca(method)
@@ -1651,13 +1648,15 @@ if __name__ == "__main__":
 
                 cg.copy_output(os.path.join(cg.dir_job, "energy_TZVPD"))
 
+                initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) #Capture the molecule with its new gas-phase energy
+
             # CPCM
             if not initial_rdkit_molecule_with_conformers:
                 cg.setup_initial_structure(
                     smiles, xyz_file, charge, title="CPCM calculation"
                 )
                 if do_geometry_optimization:
-                    cg.calculate_rdkit(rms_threshold=1.0)
+                    cg.calculate_rdkit(rms_threshold=0.1, rms_only_heavy_atoms=False)
 
                     cg.sort_by_energy()
 
@@ -1667,7 +1666,7 @@ if __name__ == "__main__":
             else:
                 cg.setup_initial_structure(
                     initial_rdkit_molecule_with_conformers,
-                    xyz_file,
+                    None,  # CHANGED: Prevents the script from reloading the raw file
                     charge,
                     title="CPCM calculation",
                 )
