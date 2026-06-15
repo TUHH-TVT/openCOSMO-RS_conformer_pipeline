@@ -1626,7 +1626,7 @@ if __name__ == "__main__":
                 )
 
                 if do_geometry_optimization:
-                    cg.calculate_rdkit(rms_threshold=0.1, rms_only_heavy_atoms=False)
+                    cg.calculate_rdkit(rms_threshold=1.0)
 
                     cg.sort_by_energy()
 
@@ -1656,7 +1656,7 @@ if __name__ == "__main__":
                     smiles, xyz_file, charge, title="CPCM calculation"
                 )
                 if do_geometry_optimization:
-                    cg.calculate_rdkit(rms_threshold=0.1, rms_only_heavy_atoms=False)
+                    cg.calculate_rdkit(rms_threshold=1.0)
 
                     cg.sort_by_energy()
 
