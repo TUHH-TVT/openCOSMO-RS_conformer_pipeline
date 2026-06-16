@@ -1318,7 +1318,7 @@ class ORCA_DFT_FINAL(ORCA):
             lines.append("$new_job")
             lines.append("")
 
-        lines.append(f"! def2-TZVPD SP{parallel_string}")
+        lines.append(f"! BP86 def2-TZVPD SP{parallel_string}")
         lines.append("")
 
         lines.append(f'%base "{self.filename_final_base}"')
