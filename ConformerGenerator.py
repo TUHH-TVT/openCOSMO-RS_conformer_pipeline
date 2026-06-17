@@ -1633,7 +1633,10 @@ if __name__ == "__main__":
                     cg.filter_by_energy_window(6 * kJ_per_kcal)
 
                     cg.filter_by_rms_window(rms_threshold=1.0)
-
+                    initial_rdkit_molecule_with_conformers = Chem.Mol(
+                        cg.mol
+                    )  # create copy for later
+					
                     method = ORCA_DFT_FAST()
                     cg.calculate_orca(method)
 
@@ -1647,8 +1650,6 @@ if __name__ == "__main__":
                 cg.calculate_orca(method)
 
                 cg.copy_output(os.path.join(cg.dir_job, "energy_TZVPD"))
-
-                initial_rdkit_molecule_with_conformers = Chem.Mol(cg.mol) #Capture the molecule with its new gas-phase energy
 
             # CPCM
             if not initial_rdkit_molecule_with_conformers:
@@ -1666,7 +1667,7 @@ if __name__ == "__main__":
             else:
                 cg.setup_initial_structure(
                     initial_rdkit_molecule_with_conformers,
-                    None,  # CHANGED: Prevents the script from reloading the raw file
+                    xyz_file,
                     charge,
                     title="CPCM calculation",
                 )
