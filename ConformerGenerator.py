@@ -294,13 +294,13 @@ class ConformerGenerator(object):
         sanitize=False,
     ):
 
-        # make the appropriate copy to not modify input
+	# make the appropriate copy to not modify input
         if rms_only_heavy_atoms:
             probe_mol = Chem.RemoveHs(probe_molecule, sanitize=sanitize)
             reference_mol = Chem.RemoveHs(reference_molecule, sanitize=sanitize)
         else:
-            probe_mol = Chem.Mol(probe_molecule, sanitize=sanitize)
-            reference_mol = Chem.Mol(reference_molecule, sanitize=sanitize)
+            probe_mol = Chem.Mol(probe_molecule) #removed sanitize
+            reference_mol = Chem.Mol(reference_molecule) #removed sanitize
 
         return rdMolAlign.GetBestRMS(
             probe_mol,
@@ -1318,7 +1318,7 @@ class ORCA_DFT_FINAL(ORCA):
             lines.append("$new_job")
             lines.append("")
 
-        lines.append(f"! def2-TZVPD SP{parallel_string}")
+        lines.append(f"! BP86 def2-TZVPD SP{parallel_string}")
         lines.append("")
 
         lines.append(f'%base "{self.filename_final_base}"')
@@ -1636,7 +1636,7 @@ if __name__ == "__main__":
                     initial_rdkit_molecule_with_conformers = Chem.Mol(
                         cg.mol
                     )  # create copy for later
-
+					
                     method = ORCA_DFT_FAST()
                     cg.calculate_orca(method)
 
