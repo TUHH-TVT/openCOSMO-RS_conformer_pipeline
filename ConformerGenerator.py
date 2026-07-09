@@ -1061,6 +1061,23 @@ class ORCA(ABC):
         )
         self._orca_full_path = orca_finder.executable_path
 
+        orca_output = spr.run(
+            [self._orca_full_path, "--version"],
+            capture_output=True,
+            text=True,
+        ).stdout
+
+        version_match = re.search(r"Program Version\s+(\d+)\.(\d+)", orca_output)
+        if not version_match:
+            raise RuntimeError("Could not determine the installed ORCA version.")
+
+        orca_version = tuple(map(int, version_match.groups()))
+        if orca_version < (6, 1):
+            raise RuntimeError(
+                f"ORCA 6.1 or newer is required, but version "
+                f"{orca_version[0]}.{orca_version[1]} was found."
+            )
+
         if platform.system().lower() == "windows":
             search_command = "where"
             index_to_be_used = 0
@@ -1470,11 +1487,6 @@ class ORCA_DFT_CPCM_FINAL(ORCA_DFT_CPCM):
 
             lines.append("$new_job")
             lines.append("")
-
-        # in ORCA 6.0 there is a bug leading to paralell polarizability calculations to be wrong
-        # in a future version this might be unnecessary
-        if self.calculate_atomic_polarizabilities:
-            parallel_string = ""
 
         lines.append(f"! CPCM BP86 def2-TZVPD SP{parallel_string}")
         lines.append("")

@@ -1,7 +1,7 @@
 # openCOSMO-RS_conformer_pipeline
 
 Important for the execution are following requirements:
-- Working installation of ORCA 6.0+ (please make sure to download and extract all available compressed files for your OS)
+- Working installation of ORCA 6.1+ (please make sure to download and extract all available compressed files for your OS)
 - The folder containing the ORCA installation has to be added to the path environment variable.
 - Install the xtb executable from the [official repo releases](https://github.com/grimme-lab/xtb/releases). To do this copy the main binary from the 'bin' folder inside the compressed file into the ORCA installation directory and rename it to 'otool_xtb' or 'otool_xtb.exe' depending on your OS.
 - In case you want to use balloon to generate conformers instead of rdkit, you can get balloon [here](http://users.abo.fi/mivainio/balloon/download.php).
