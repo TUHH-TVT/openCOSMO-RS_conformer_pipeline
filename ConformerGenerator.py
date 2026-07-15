@@ -39,7 +39,7 @@ class ExecutableFinder:
         if system_name == "windows":
             search_command = "where"
             index_to_be_used = 0
-        elif system_name == "linux":
+        elif system_name in ["linux", "Darwin"]:
             search_command = "whereis"
             index_to_be_used = 1
         else:
