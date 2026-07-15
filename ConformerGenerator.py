@@ -39,7 +39,7 @@ class ExecutableFinder:
         if system_name == "windows":
             search_command = "where"
             index_to_be_used = 0
-        elif system_name in ["linux", "Darwin"]:
+        elif system_name in ["linux", "darwin"]:
             search_command = "whereis"
             index_to_be_used = 1
         else:
@@ -1081,7 +1081,7 @@ class ORCA(ABC):
         if platform.system().lower() == "windows":
             search_command = "where"
             index_to_be_used = 0
-        elif platform.system().lower() == "linux":
+        elif platform.system().lower() in ["darwin", "linux"]:
             search_command = "whereis"
             index_to_be_used = 1
         else:
