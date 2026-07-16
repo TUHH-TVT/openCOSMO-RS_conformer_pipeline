@@ -34,26 +34,12 @@ class ExecutableFinder:
         self.error_message = error_message
         self.executable_path = self._find_executable()
 
-    def _find_executable(self):
-        system_name = platform.system().lower()
-        if system_name == "windows":
-            search_command = "where"
-            index_to_be_used = 0
-        elif system_name in ["linux", "darwin"]:
-            search_command = "whereis"
-            index_to_be_used = 1
-        else:
-            raise NotImplementedError(
-                f"For the following OS, getting the full path of the {self.executable_name} executable needs to be programmed: {platform.system()}"
-            )
-
-        output = spr.run([search_command, self.executable_name], capture_output=True)
-        result = output.stdout.decode("utf-8").split()
-
-        if output.returncode != 0 or len(result) <= index_to_be_used:
+	def _find_executable(self):
+        path = shutil.which(self.executable_name) # platform agnostic
+        if not path:
             raise FileNotFoundError(self.error_message)
-
-        return result[index_to_be_used].strip()
+        #print(path)
+        return path
 
 
 class ConformerGenerator(object):
