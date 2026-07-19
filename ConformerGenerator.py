@@ -28,20 +28,6 @@ from input_parsers import kJdivmol_per_hartree
 from input_parsers import angstrom_per_bohr
 
 
-class ExecutableFinder:
-    def __init__(self, executable_name: str, error_message: str):
-        self.executable_name = executable_name
-        self.error_message = error_message
-        self.executable_path = self._find_executable()
-
-	def _find_executable(self):
-        path = shutil.which(self.executable_name) # platform agnostic
-        if not path:
-            raise FileNotFoundError(self.error_message)
-        #print(path)
-        return path
-
-
 class ConformerGenerator(object):
 
     @staticmethod
@@ -105,12 +91,10 @@ class ConformerGenerator(object):
     def find_balloon_executable(cls):
         if not hasattr(cls, "_balloon_executable"):
             try:
-                balloon_finder = ExecutableFinder(
-                    "balloon", "Could not find balloon executable."
-                )
+                balloon_finder = shutil.which("balloon") # platform agnostic
                 cls._balloon_executable = balloon_finder.executable_path
             except FileNotFoundError as e:
-                print(e)
+                print(e, "Could not find balloon executable")
                 cls._balloon_executable = None
         return cls._balloon_executable
 
@@ -1041,10 +1025,11 @@ class ORCA(ABC):
         self.mol = None
         self.optimize_kw = "OPT"
 
-        orca_finder = ExecutableFinder(
-            "orca",
-            "The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.",
-        )
+        try:
+            orca_finder = shutil.which("orca")
+        except:
+            raise FileNotFoundError("The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.")
+        
         self._orca_full_path = orca_finder.executable_path
 
         orca_output = spr.run(
@@ -1074,11 +1059,11 @@ class ORCA(ABC):
             raise NotImplementedError(
                 f"For the following OS, getting the full path of the ORCA executable needs to be programmed: {platform.system()}"
             )
-
-        _ = ExecutableFinder(
-            "otool_xtb",
-            "The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.",
-        )
+        try:
+            _ = shutil.which("otool_xtb")
+        except:
+            raise FileNotFoundError("The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.")
+        
 
     def execute(
         self,
