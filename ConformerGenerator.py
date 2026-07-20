@@ -92,7 +92,7 @@ class ConformerGenerator(object):
         if not hasattr(cls, "_balloon_executable"):
             try:
                 cls._balloon_executable = shutil.which("balloon") # platform agnostic finder, returns string
-            except FileNotFoundError as e:
+            if not cls._balloon_executable:
                 print(e, "Could not find balloon executable")
                 cls._balloon_executable = None
         return cls._balloon_executable
@@ -1026,7 +1026,7 @@ class ORCA(ABC):
 
         try:
             self._orca_full_path = shutil.which("orca")
-        except:
+        if not self._orca_full_path:
             raise FileNotFoundError("The ORCA installation could not be found. Either it is not installed or its location has not been added to the path environment variable.")
 
         orca_output = spr.run(
@@ -1057,8 +1057,8 @@ class ORCA(ABC):
                 f"For the following OS, getting the full path of the ORCA executable needs to be programmed: {platform.system()}"
             )
         try:
-            _ = shutil.which("otool_xtb")
-        except:
+            otool_xtb_path = shutil.which("otool_xtb")
+        if not otool_xtb_path:
             raise FileNotFoundError("The xtb binary could not be found. Please refer to the readme file of this github repository to check how to install it.")
         
 
