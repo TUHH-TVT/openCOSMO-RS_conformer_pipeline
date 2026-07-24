@@ -1,0 +1,19 @@
+# Optional: makes it easy to run with `docker compose run pipeline`
+services:
+  pipeline:
+    build:
+      context: .
+      args:
+        ORCA_DIR: orca          # path to your extracted ORCA installation
+        XTB_VERSION: "6.7.1"    # xtb release to fetch (skipped if otool_xtb already in ORCA_DIR)
+    volumes:
+      # Mount your project data directory into /data inside the container
+      - ./data:/data
+    working_dir: /data
+    command:
+      - "--structures_file"
+      - "structures.inp"
+      - "--cpcm_radii_file"
+      - "/app/cpcm_radii.inp"
+      - "--n_cores"
+      - "4"

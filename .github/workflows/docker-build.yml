@@ -1,0 +1,22 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ORCA
+        run: |
+          curl -fSL "${{ secrets.ORCA_DOWNLOAD_URL }}" -o orca.tar.xz
+          mkdir -p orca && tar xf orca.tar.xz -C orca --strip-components=1
+          rm orca.tar.xz
+
+      - name: Build Docker image
+        run: docker build -t opencosmo-rs-conformer .

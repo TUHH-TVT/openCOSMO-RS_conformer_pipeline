@@ -31,6 +31,47 @@ from input_parsers import angstrom_per_bohr
 class ConformerGenerator(object):
 
     @staticmethod
+    def _is_sdf_file(filepath):
+        """Check if a file is an SDF/MOL file based on its extension."""
+        ext = os.path.splitext(filepath)[-1].lower()
+        return ext in (".sdf", ".mol")
+
+    @staticmethod
+    def get_mol_from_sdf(sdf_file, charge=0):
+        """Read an SDF or MOL file and return an RDKit Mol with 3D coordinates.
+
+        SDF files already contain bond connectivity, so no bond determination
+        is needed (unlike XYZ files).  Tries strict parsing first, then falls
+        back to lenient parsing for files with minor formatting issues.
+        """
+        mol = Chem.MolFromMolFile(sdf_file, removeHs=False, sanitize=False)
+        if mol is None:
+            # Retry with lenient parsing (handles non-standard CTAB headers, etc.)
+            mol = Chem.MolFromMolFile(sdf_file, removeHs=False, sanitize=False, strictParsing=False)
+        if mol is None:
+            # Try via SDMolSupplier for multi-molecule SDF (take first entry)
+            with Chem.SDMolSupplier(sdf_file, removeHs=False, sanitize=False) as suppl:
+                for m in suppl:
+                    if m is not None:
+                        mol = m
+                        break
+        if mol is None:
+            raise ValueError(f"Could not read molecule from SDF file: {sdf_file}")
+        mol.UpdatePropertyCache(strict=False)
+        return mol
+
+    @staticmethod
+    def get_mol_from_structure_file(structure_file, charge, **kwargs):
+        """Load a molecule from either an XYZ or SDF/MOL file.
+
+        Dispatches based on file extension.
+        """
+        if ConformerGenerator._is_sdf_file(structure_file):
+            return ConformerGenerator.get_mol_from_sdf(structure_file, charge)
+        else:
+            return ConformerGenerator.get_mol_from_xyz(structure_file, charge, **kwargs)
+
+    @staticmethod
     def get_mol_from_xyz(
         xyz_file, charge, use_xyz2mol_vdw=False, vdw_covalent_factor=1.3
     ):
@@ -197,14 +238,18 @@ class ConformerGenerator(object):
                         except Exception:
                             pass
         else:
-            try:
-                xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
-                mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
-            except Exception:
-                xyz_mol = ConformerGenerator.get_mol_from_xyz(
-                    xyz_file, charge, use_xyz2mol_vdw="force"
-                )
-                mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
+            if ConformerGenerator._is_sdf_file(xyz_file):
+                sdf_mol = ConformerGenerator.get_mol_from_sdf(xyz_file, charge)
+                mol = AssignBondOrdersFromTemplate(mol, sdf_mol)
+            else:
+                try:
+                    xyz_mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+                    mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
+                except Exception:
+                    xyz_mol = ConformerGenerator.get_mol_from_xyz(
+                        xyz_file, charge, use_xyz2mol_vdw="force"
+                    )
+                    mol = AssignBondOrdersFromTemplate(mol, xyz_mol)
 
             mol.UpdatePropertyCache(strict=False)
         mol.GetConformer(0).SetDoubleProp("energy", 0)
@@ -382,7 +427,7 @@ class ConformerGenerator(object):
 
             if xyz_file:
                 if not self.smiles:
-                    self.mol = ConformerGenerator.get_mol_from_xyz(xyz_file, charge)
+                    self.mol = ConformerGenerator.get_mol_from_structure_file(xyz_file, charge)
                     self.smiles = Chem.MolToSmiles(self.mol)
 
         except Exception:
@@ -439,6 +484,7 @@ class ConformerGenerator(object):
             else:
                 step_dirs = []
                 all_step_dirs = []
+                last_step_dir = None
                 for dir_ in os.listdir(self.dir_job):
                     if "_" in dir_:
                         step_number = dir_.split("_")[0]
@@ -1561,21 +1607,29 @@ if __name__ == "__main__":
 
                 if mol is None:
                     if len(xyz_file) > 0:
-                        with open(xyz_file, "r") as f:
-                            xyz_file_lines = f.readlines()
-                            this_number_of_atoms = 0
-                            for xyz_file_line in xyz_file_lines[2:]:
-                                xyz_file_line = xyz_file_line.split()
-                                if len(xyz_file_line) == 4:
-                                    atom_symbol = xyz_file_line[0]
-                                    available_atomic_numbers.add(
-                                        Chem.GetPeriodicTable().GetAtomicNumber(
-                                            atom_symbol
+                        if ConformerGenerator._is_sdf_file(xyz_file):
+                            sdf_mol = ConformerGenerator.get_mol_from_sdf(xyz_file)
+                            sdf_mol = Chem.AddHs(sdf_mol)
+                            available_atomic_numbers.update(
+                                [atom.GetAtomicNum() for atom in sdf_mol.GetAtoms()]
+                            )
+                            number_of_atoms.append(sdf_mol.GetNumAtoms())
+                        else:
+                            with open(xyz_file, "r") as f:
+                                xyz_file_lines = f.readlines()
+                                this_number_of_atoms = 0
+                                for xyz_file_line in xyz_file_lines[2:]:
+                                    xyz_file_line = xyz_file_line.split()
+                                    if len(xyz_file_line) == 4:
+                                        atom_symbol = xyz_file_line[0]
+                                        available_atomic_numbers.add(
+                                            Chem.GetPeriodicTable().GetAtomicNumber(
+                                                atom_symbol
+                                            )
                                         )
-                                    )
-                                    this_number_of_atoms += 1
+                                        this_number_of_atoms += 1
 
-                            number_of_atoms.append(this_number_of_atoms)
+                                number_of_atoms.append(this_number_of_atoms)
 
     if len(cpcm_radii) > 0:
         atomic_numbers_without_radii = available_atomic_numbers - set(cpcm_radii.keys())

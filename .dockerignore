@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.egg-info/
+data/
+*.zip
+.git/
+# Exclude leftover tarballs inside orca/ (already extracted)
+orca/*.tar.xz
+orca/*.tar.gz
